@@ -123,6 +123,21 @@ uvx --from git+https://github.com/syleedlabs/deal-locator-mcp playwright install
 
 건너뛰어도 조회 도구 5개는 정상 동작합니다.
 
+### 5. 첫 조회를 빠르게 (선택 — 프리워밍)
+
+구·동을 **처음** 조회하면 국토부 API 를 12개월치 받아오느라 20~35초 걸립니다
+(한 번 받은 구는 이후 즉시 응답합니다). 미리 채워두려면:
+
+```bash
+# 서울 25구 · 12개월치 캐시 채우기 (API 300회, 몇 분 소요 — 한 번만)
+uvx --from git+https://github.com/syleedlabs/deal-locator-mcp deal-locator-warm
+
+# 자주 보는 구만:  deal-locator-warm --gus 강남구 성동구 마포구
+```
+
+인증키는 조회와 같은 `~/.deal-locator.env` 를 씁니다. 중간에 끊겨도 다시 실행하면
+남은 것만 이어서 받습니다. 실거래는 매달 갱신되니, 원하면 월 1회쯤 다시 돌리세요.
+
 ---
 
 ## 도구 6종

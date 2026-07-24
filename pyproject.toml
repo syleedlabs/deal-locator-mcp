@@ -29,6 +29,9 @@ dev = ["pytest>=8.0", "jsonschema>=4.0"]
 
 [project.scripts]
 deal-locator-mcp = "deal_locator.server:main"
+# 첫 조회 지연(구당 20~35초)을 미리 걷어내는 캐시 워머. MCP 도구가 아니라 CLI 다 —
+# 25구 12개월이면 API 300회라 대화 중에 돌리면 몇 분씩 멈춘다.
+deal-locator-warm = "deal_locator.warm:main"
 
 # 데이터 파이프라인(core)은 원래 사내 별도 패키지였다. 배포본은 설치 한 줄로
 # 끝나야 하므로 서브패키지로 동봉한다.
