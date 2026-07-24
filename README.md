@@ -267,30 +267,42 @@ uvx --from git+https://github.com/syleedlabs/deal-locator-mcp deal-locator-warm
 
 ---
 
-## 데이터카드
+## 데이터카드 · `deal_card_create`
 
 건물 사진 위에 실측 수치를 얹은 4:5 카드(2160×2700)를 만듭니다. 홍보 문구는
 들어가지 않습니다 — 카드의 모든 글자가 실측값이거나 고정 라벨입니다.
 
+**사용방법**
+
 ```
-deal_card_create(address="종로구 소격동 86", photo="~/사진/소격동86.jpg")
+/deal-card-image 영등포구 영등포동8가 34-20 [건물사진]
 ```
 
-**매칭 신뢰도가 카드에 표기됩니다.** 이미지는 대화를 떠나 혼자 돌아다니므로,
-근거가 항상 따라다녀야 한다고 봤습니다. `추정매칭` 이하는 색으로 구분됩니다.
+> 직접 호출: `deal_card_create(address="영등포구 영등포동8가 34-20", photo="~/사진.jpg")`
 
-**건물 사진이 없으면 카드를 만들지 않고 멈춥니다.** 사진 없이 만들면 회색 판이
-나가고 결국 다시 만들게 되기 때문입니다. 사진 경로를 주고 다시 부르거나,
-그대로 진행하려면 `allow_no_photo=true` 를 주세요.
+**결과물** — 건물 사진(입력)에 실측 수치를 얹어 카드(출력)를 만듭니다.
 
-저장 위치는 `~/deal-locator-cards/<날짜>/` 입니다 (`DEAL_LOCATOR_CARD_DIR` 로 변경 가능).
-
-**실제 결과물** — `deal_card_create("영등포구 영등포동8가 34-20", photo=...)` 로 만든 카드입니다.
-
-<img src="assets/deal-card-create-example.png" alt="deal_card_create 결과물 — 영등포구 영등포동8가 34-20(로다커피) 데이터카드" width="320">
+<table>
+<tr>
+<td align="center"><b>건물 사진 (입력)</b></td>
+<td align="center"><b>데이터카드 (결과물)</b></td>
+</tr>
+<tr>
+<td><img src="assets/deal-card-create-input.png" width="280" alt="영등포동8가 34-20 건물 사진(입력)"></td>
+<td><img src="assets/deal-card-create-example.png" width="280" alt="영등포동8가 34-20 데이터카드(결과물)"></td>
+</tr>
+</table>
 
 > 매매 4.4억 · 토지 7평(평단가 6,377만원/평) · 연면적 9평 · 준공업 · 1985년 준공 · 정확매칭 0.90.
-> 건물 사진 위에 실측값과 신뢰도 배지(`정확매칭 · 0.90`)가 얹힌 4:5 카드입니다.
+
+**설명**
+
+- **매칭 신뢰도가 카드에 표기됩니다.** 이미지는 대화를 떠나 혼자 돌아다니므로,
+  근거가 항상 따라다녀야 한다고 봤습니다. `추정매칭` 이하는 색으로 구분됩니다.
+- **건물 사진이 없으면 카드를 만들지 않고 멈춥니다.** 사진 없이 만들면 회색 판이
+  나가고 결국 다시 만들게 되기 때문입니다. 사진 경로를 주고 다시 부르거나,
+  그대로 진행하려면 `allow_no_photo=true` 를 주세요.
+- 저장 위치는 `~/deal-locator-cards/<날짜>/` 입니다 (`DEAL_LOCATOR_CARD_DIR` 로 변경 가능).
 
 ---
 
