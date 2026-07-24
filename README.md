@@ -1,6 +1,7 @@
-# deal-locator
+# deal-locator — 상업용 부동산 딜 올인원 MCP
 
-**마스킹된 실거래 지번을 특정하는 MCP 서버.** 공인중개사를 위한 도구입니다.
+**실거래가 · 시세 · 데이터카드 올인원.** 국토부 공공데이터(실거래가 · 건축물대장)를
+공인중개사 실무로 — 구·동 시세, 마스킹된 실거래 지번 특정, 주소·필지 확인, 데이터카드 자동 제작.
 
 ![Author](https://img.shields.io/badge/author-DLABS-1f2937)
 ![Tools](https://img.shields.io/badge/MCP_도구-6종-2563eb)
@@ -22,13 +23,13 @@
 - [무엇이 들어있나요](#무엇이-들어있나요)
 - [설치](#설치)
 - [도구 6종](#도구-6종)
-  - [`resolve_address` — 주소·필지 확인](#resolve_address--주소필지-확인)
-  - [`deal_card_search` — 매물 종합 확인](#deal_card_search--매물-종합-확인)
-  - [`deal_history` — 실거래가 손바뀜 이력 확인](#deal_history--실거래가-손바뀜-이력-확인)
-  - [`area_scan` — 구/동 실거래가 최신 시세 확인](#area_scan--구동-실거래가-최신-시세-확인)
-  - [`match_explain` — 매칭 근거](#match_explain--매칭-근거)
+  - [1. `resolve_address` — 주소·필지 확인](#1-resolve_address--주소필지-확인)
+  - [2. `deal_card_search` — 매물 종합 확인](#2-deal_card_search--매물-종합-확인)
+  - [3. `deal_history` — 실거래가 손바뀜 이력 확인](#3-deal_history--실거래가-손바뀜-이력-확인)
+  - [4. `area_scan` — 구/동 실거래가 최신 시세 확인](#4-area_scan--구동-실거래가-최신-시세-확인)
+  - [5. `match_explain` — 매칭 근거](#5-match_explain--매칭-근거)
     - [매칭 신뢰도는 반드시 함께 읽으세요](#매칭-신뢰도는-반드시-함께-읽으세요)
-  - [`deal_card_create` — 데이터카드](#deal_card_create--데이터카드)
+  - [6. `deal_card_create` — 데이터카드](#6-deal_card_create--데이터카드)
 - [FAQ](#faq)
 - [저장소 구조](#저장소-구조)
 - [한계 · 주의](#한계--주의)
@@ -190,7 +191,7 @@ uvx --from git+https://github.com/syleedlabs/deal-locator-mcp deal-locator-warm
 
 ---
 
-## `resolve_address` — 주소·필지 확인
+## 1. `resolve_address` — 주소·필지 확인
 
 **사용방법**
 
@@ -212,7 +213,7 @@ uvx --from git+https://github.com/syleedlabs/deal-locator-mcp deal-locator-warm
 
 ---
 
-## `deal_card_search` — 매물 종합 확인
+## 2. `deal_card_search` — 매물 종합 확인
 
 **사용방법**
 
@@ -235,7 +236,7 @@ uvx --from git+https://github.com/syleedlabs/deal-locator-mcp deal-locator-warm
 
 ---
 
-## `deal_history` — 실거래가 손바뀜 이력 확인
+## 3. `deal_history` — 실거래가 손바뀜 이력 확인
 
 **사용방법**
 
@@ -260,7 +261,7 @@ uvx --from git+https://github.com/syleedlabs/deal-locator-mcp deal-locator-warm
 
 ---
 
-## `area_scan` — 구/동 실거래가 최신 시세 확인
+## 4. `area_scan` — 구/동 실거래가 최신 시세 확인
 
 **사용방법**
 
@@ -286,7 +287,7 @@ uvx --from git+https://github.com/syleedlabs/deal-locator-mcp deal-locator-warm
 
 ---
 
-## `match_explain` — 매칭 근거
+## 5. `match_explain` — 매칭 근거
 
 **사용방법**
 
@@ -329,7 +330,7 @@ uvx --from git+https://github.com/syleedlabs/deal-locator-mcp deal-locator-warm
 
 ---
 
-## `deal_card_create` — 데이터카드
+## 6. `deal_card_create` — 데이터카드
 
 건물 사진 위에 실측 수치를 얹은 4:5 카드(2160×2700)를 만듭니다. 홍보 문구는
 들어가지 않습니다 — 카드의 모든 글자가 실측값이거나 고정 라벨입니다.
