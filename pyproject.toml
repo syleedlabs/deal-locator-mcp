@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "deal-locator-mcp"
+version = "1.0.0"
+description = "국토부 실거래가 × 건축물대장 역매칭 MCP — 마스킹된 실거래 지번을 특정한다 (서울 상업업무용 v1)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+keywords = ["mcp", "실거래가", "부동산", "공인중개사", "건축물대장"]
+dependencies = [
+    "fastmcp>=2.0",
+    # ↓ deal_locator.core 데이터 파이프라인 의존
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "PublicDataReader>=0.30",
+    "requests>=2.28",
+    "xmltodict>=0.13",
+    "python-dateutil>=2.8",
+    # ↓ 데이터카드 렌더 (deal_card_create). 최초 1회 `playwright install chromium` 필요
+    "jinja2>=3.1",
+    "playwright>=1.40",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "jsonschema>=4.0"]
+
+[project.scripts]
+deal-locator-mcp = "deal_locator.server:main"
+
+# 데이터 파이프라인(core)은 원래 사내 별도 패키지였다. 배포본은 설치 한 줄로
+# 끝나야 하므로 서브패키지로 동봉한다.
+[tool.hatch.build.targets.wheel]
+packages = ["src/deal_locator"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

@@ -1,0 +1,118 @@
+<meta charset="utf-8">
+<style>
+{{ font_face_css }}
+
+/* ──────────────────────────────────────────────────────────────
+   deal-locator 데이터카드 — 4:5 (1080×1350)
+
+   전면 사진 위에 좌측 다크 그라디언트를 깔고, 그 위에 키커·매매가·스펙표를
+   얹는다. 지도/역명은 넣지 않는다(배포판은 지도 API 키를 강제하지 않는다).
+   지도가 있던 자리를 비우는 대신 스펙표를 아래로 내려, 사진 상단부가
+   가려지지 않게 했다.
+   ────────────────────────────────────────────────────────────── */
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { width:1080px; height:1350px; }
+body {
+  overflow:hidden;
+  font-family:'Pretendard', -apple-system, sans-serif;
+  background:#0B0D11; color:#FFFFFF;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ── 배경 사진 ── */
+.photo {
+  position:absolute; inset:0;
+  background:#151922 center 30% / cover no-repeat;
+  {% if photo_css %}background-image:{{ photo_css }};{% endif %}
+  filter:saturate(0.94);
+}
+/* 어둡게 하는 건 **글자가 앉는 좌측 기둥**만. 사진 전체나 하단 전체를 누르면
+   건물이 안 보인다(실측 확인). 우측 40%는 원본 밝기·채도를 그대로 둔다 —
+   카드의 주인공은 건물이고, 스크림은 글자 자리를 만드는 최소 장치다.
+   하단 얇은 그라디언트는 맨 아래 한 줄이 바닥 텍스처에 묻히는 걸 막는 용도. */
+.scrim {
+  position:absolute; inset:0;
+  background:
+    linear-gradient(to right,
+      rgba(8,10,14,0.93) 0%,
+      rgba(8,10,14,0.90) 26%,
+      rgba(8,10,14,0.74) 40%,
+      rgba(8,10,14,0.40) 53%,
+      rgba(8,10,14,0.12) 65%,
+      rgba(8,10,14,0.00) 76%),
+    linear-gradient(to bottom,
+      rgba(8,10,14,0.34) 0%,
+      rgba(8,10,14,0.00) 18%,
+      rgba(8,10,14,0.00) 84%,
+      rgba(8,10,14,0.42) 100%);
+}
+
+.wrap {
+  position:absolute; inset:0; z-index:2;
+  padding:0 64px 62px;
+  display:flex; flex-direction:column;
+}
+
+/* ── 키커 + 매매가 ── */
+.eyebrow {
+  font-size:27px; font-weight:500; letter-spacing:3px; color:#C8A45C;
+  text-shadow:0 2px 12px rgba(0,0,0,0.85), 0 0 30px rgba(0,0,0,0.6);
+}
+.price {
+  margin-top:12px; margin-bottom:26px;
+  font-size:{{ price_fs }}px; font-weight:800; letter-spacing:-4px; line-height:0.98;
+  color:#D9B871;
+  text-shadow:0 4px 18px rgba(0,0,0,0.85), 0 0 44px rgba(0,0,0,0.55);
+}
+
+/* ── 스펙표 (아래로) ── */
+.spacer { flex:1 1 auto; }
+
+table.spec { width:100%; border-collapse:collapse; }
+table.spec tr + tr td { border-top:1px solid rgba(255,255,255,0.13); }
+table.spec td { padding:17px 0; vertical-align:baseline; }
+td.k {
+  width:190px; font-size:24px; font-weight:400; color:#C6CBD4; letter-spacing:0.2px;
+  text-shadow:0 2px 10px rgba(0,0,0,0.7);
+}
+td.v {
+  font-size:28px; font-weight:700; color:#FFFFFF; letter-spacing:-0.4px;
+  text-shadow:0 2px 10px rgba(0,0,0,0.7);
+}
+
+/* ── 매칭 신뢰도 (지도·역명이 있던 자리를 대신하는 한 줄) ── */
+.conf { margin-top:26px; display:flex; align-items:center; gap:13px; }
+.conf .label {
+  font-size:20px; font-weight:400; letter-spacing:2px; color:#C8A45C;
+  text-shadow:0 2px 10px rgba(0,0,0,0.7);
+}
+.conf .val {
+  display:inline-flex; align-items:center; gap:9px;
+  font-size:23px; font-weight:600; color:{{ conf_color }};
+  text-shadow:0 2px 10px rgba(0,0,0,0.7);
+}
+.conf .dot { width:9px; height:9px; border-radius:50%; background:currentColor; }
+</style>
+
+<div class="photo"></div>
+<div class="scrim"></div>
+
+<div class="wrap">
+  <div class="spacer"></div>
+
+  {% if eyebrow %}<div class="eyebrow">{{ eyebrow }}</div>{% endif %}
+  <div class="price">{{ price }}</div>
+
+  <table class="spec">
+    {% for r in rows %}
+    <tr><td class="k">{{ r.label }}</td><td class="v">{{ r.value }}</td></tr>
+    {% endfor %}
+  </table>
+
+  {% if conf_text %}
+  <div class="conf">
+    <span class="label">매칭</span>
+    <span class="val"><span class="dot"></span>{{ conf_text }}</span>
+  </div>
+  {% endif %}
+</div>

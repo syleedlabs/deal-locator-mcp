@@ -1,0 +1,12 @@
+{
+  "name": "deal-locator",
+  "displayName": "딜 로케이터 — 실거래가 역매칭",
+  "version": "1.0.0",
+  "description": "국토부 실거래가 × 건축물대장 역매칭. 마스킹된 지번을 특정해 서울 상업업무용 통건물의 실거래·시세를 조회한다.",
+  "author": {
+    "name": "디랩스 (DLABS)"
+  },
+  "repository": "https://github.com/syleedlabs/deal-locator-mcp",
+  "license": "Apache-2.0",
+  "keywords": ["부동산", "실거래가", "건축물대장", "중개", "꼬마빌딩"]
+}

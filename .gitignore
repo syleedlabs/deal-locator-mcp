@@ -1,0 +1,20 @@
+# 인증키 — 절대 커밋 금지
+.env
+.env.*
+!.env.example
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.cache/
+
+.DS_Store
+
+# 폐기된 대안 디자인(밝은 문서형 레이아웃). 코드에서 참조하지 않는다 —
+# 공개 배포본에 넣으면 어느 쪽이 진짜 템플릿인지 혼동을 준다. 파일은 로컬에 남긴다.
+src/deal_locator/render/card 2.html

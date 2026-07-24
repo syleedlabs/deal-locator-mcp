@@ -1,0 +1,32 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.github.syleedlabs/deal-locator",
+  "description": "국토부 실거래가 × 건축물대장 역매칭 — 마스킹된 실거래 지번을 특정한다 (서울 상업업무용, 공인중개사용)",
+  "version": "1.0.0",
+  "repository": {
+    "url": "https://github.com/syleedlabs/deal-locator-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "oci",
+      "registryBaseUrl": "https://github.com",
+      "identifier": "syleedlabs/deal-locator-mcp",
+      "version": "1.0.0",
+      "transport": { "type": "stdio" },
+      "environmentVariables": [
+        {
+          "name": "DEAL_LOCATOR_SERVICE_KEY",
+          "description": "공공데이터포털(data.go.kr) 디코딩 인증키. DATA_GO_KR_API_KEY 로도 인식한다.",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "DEAL_LOCATOR_CARD_DIR",
+          "description": "데이터카드 PNG 저장 폴더 (기본 ~/deal-locator-cards)",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}

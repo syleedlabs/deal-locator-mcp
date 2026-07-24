@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "deal-locator": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/syleedlabs/deal-locator-mcp",
+        "deal-locator-mcp"
+      ]
+    }
+  }
+}
