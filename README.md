@@ -212,6 +212,13 @@ deal_card_create(address="종로구 소격동 86", photo="~/사진/소격동86.j
 
 저장 위치는 `~/deal-locator-cards/<날짜>/` 입니다 (`DEAL_LOCATOR_CARD_DIR` 로 변경 가능).
 
+**실제 결과물** — `deal_card_create("영등포구 영등포동8가 34-20", photo=...)` 로 만든 카드입니다.
+
+<img src="assets/deal-card-create-example.png" alt="deal_card_create 결과물 — 영등포구 영등포동8가 34-20(로다커피) 데이터카드" width="320">
+
+> 매매 4.4억 · 토지 7평(평단가 6,377만원/평) · 연면적 9평 · 준공업 · 1985년 준공 · 정확매칭 0.90.
+> 건물 사진 위에 실측값과 신뢰도 배지(`정확매칭 · 0.90`)가 얹힌 4:5 카드입니다.
+
 ---
 
 ## FAQ
