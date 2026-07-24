@@ -106,12 +106,12 @@ chmod 600 ~/.deal-locator.env
 
 | 명령 | 하는 일 |
 | --- | --- |
-| `/area-scan 강남구` · `/area-scan 대치동` | 구·동 통건물 시세와 분기 추이 |
-| `/deal-card 구로구 구로동 1128-1` | 지번 실거래 한 건 조회 |
-| `/deal-history 구로동 1128-1` | 그 지번의 손바뀜 이력 |
-| `/match-explain 구로동 1128-1` | 왜 이 건물로 판단했는지 근거 |
-| `/resolve-address 구로동 1128-1` | 주소·필지 구성 확인 |
-| `/deal-card-image 구로동 1128-1 ~/사진.jpg` | 데이터카드 PNG 만들기 |
+| `/area-scan` | 구·동 통건물 시세와 분기 추이 |
+| `/deal-card` | 지번 실거래 한 건 조회 |
+| `/deal-history` | 그 지번의 손바뀜 이력 |
+| `/match-explain` | 왜 이 건물로 판단했는지 근거 |
+| `/resolve-address` | 주소·필지 구성 확인 |
+| `/deal-card-image` | 데이터카드 PNG 만들기 |
 
 > 인증키 파일은 `~/.deal-locator.env` → `~/.config/deal-locator/.env` 순으로 찾습니다.
 > 프로젝트 폴더에 `.env` 가 있으면 그쪽이 우선입니다.
