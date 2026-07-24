@@ -22,8 +22,13 @@
 - [무엇이 들어있나요](#무엇이-들어있나요)
 - [설치](#설치)
 - [도구 6종](#도구-6종)
+  - [`resolve_address` — 주소·필지 확인](#resolve_address--주소필지-확인)
+  - [`deal_card_search` — 매물 종합](#deal_card_search--매물-종합)
+  - [`deal_history` — 손바뀜 이력](#deal_history--손바뀜-이력)
+  - [`area_scan` — 동 시세](#area_scan--동-시세)
+  - [`match_explain` — 매칭 근거](#match_explain--매칭-근거)
 - [매칭 신뢰도는 반드시 함께 읽으세요](#매칭-신뢰도는-반드시-함께-읽으세요)
-- [데이터카드](#데이터카드)
+- [데이터카드 · `deal_card_create`](#데이터카드--deal_card_create)
 - [FAQ](#faq)
 - [저장소 구조](#저장소-구조)
 - [한계 · 주의](#한계--주의)
@@ -180,12 +185,12 @@ uvx --from git+https://github.com/syleedlabs/deal-locator-mcp deal-locator-warm
 
 앞의 5개는 **읽기 전용**입니다. 파일을 만들거나 외부에 무언가를 보내지 않습니다.
 
-### 도구별 실행 예시
-
-각 도구를 **사용방법 → 결과물 → 설명** 순으로 정리했습니다.
+각 도구를 **사용방법 → 결과물 → 설명** 순으로 정리한 실행 예시입니다.
 값은 전부 공식 API 실측값이며, 표시는 가독성을 위해 정리한 것입니다.
 
-#### `resolve_address` — 주소·필지 확인
+---
+
+## `resolve_address` — 주소·필지 확인
 
 **사용방법**
 
@@ -205,7 +210,9 @@ uvx --from git+https://github.com/syleedlabs/deal-locator-mcp deal-locator-warm
 - 다른 조회가 막히기 전에 주소가 제대로 잡히는지 · 합필/부속지번이 있는지 먼저 확인합니다.
 - `조회실패` 는 '단일 필지'가 아니라 **미확인**이니 구분해서 읽으세요.
 
-#### `deal_card_search` — 매물 종합
+---
+
+## `deal_card_search` — 매물 종합
 
 **사용방법**
 
@@ -226,7 +233,9 @@ uvx --from git+https://github.com/syleedlabs/deal-locator-mcp deal-locator-warm
 
 - 지번 하나의 최신 실거래를 종합카드 1콜로. 신뢰도(정확매칭 0.97)를 함께 읽으세요.
 
-#### `deal_history` — 손바뀜 이력
+---
+
+## `deal_history` — 손바뀜 이력
 
 **사용방법**
 
@@ -249,7 +258,9 @@ uvx --from git+https://github.com/syleedlabs/deal-locator-mcp deal-locator-warm
 
 - 한 지번의 손바뀜을 최신순으로 — 재거래·가격 추이를 한눈에. 건별 신뢰도가 다를 수 있습니다.
 
-#### `area_scan` — 동 시세
+---
+
+## `area_scan` — 동 시세
 
 **사용방법**
 
@@ -272,7 +283,9 @@ uvx --from git+https://github.com/syleedlabs/deal-locator-mcp deal-locator-warm
 - 동 평균 시세는 국토부 원본 전수에 가까운 `stats` 로 답합니다.
 - `coverage`(모수 분해)를 함께 봐야 표본이 대표성을 갖는지 판단할 수 있습니다.
 
-#### `match_explain` — 매칭 근거
+---
+
+## `match_explain` — 매칭 근거
 
 **사용방법**
 
