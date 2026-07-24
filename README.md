@@ -27,8 +27,8 @@
   - [`deal_history` — 손바뀜 이력](#deal_history--손바뀜-이력)
   - [`area_scan` — 동 시세](#area_scan--동-시세)
   - [`match_explain` — 매칭 근거](#match_explain--매칭-근거)
+  - [`deal_card_create` — 데이터카드](#deal_card_create--데이터카드)
 - [매칭 신뢰도는 반드시 함께 읽으세요](#매칭-신뢰도는-반드시-함께-읽으세요)
-- [데이터카드 · `deal_card_create`](#데이터카드--deal_card_create)
 - [FAQ](#faq)
 - [저장소 구조](#저장소-구조)
 - [한계 · 주의](#한계--주의)
@@ -312,19 +312,7 @@ uvx --from git+https://github.com/syleedlabs/deal-locator-mcp deal-locator-warm
 
 ---
 
-## 매칭 신뢰도는 반드시 함께 읽으세요
-
-| 표기 | 뜻 |
-|---|---|
-| 확정 / 정확매칭 | 표제부 값이 정확히 일치 — 사실상 그 필지 |
-| 추정매칭 | 유사 스펙으로 좁힌 것 — **동일 스펙 인접 건물일 수 있습니다** |
-| 인접후보 | 후보 수준 — 확인 없이 인용하지 마세요 |
-
-`추정매칭` 이하를 고객에게 제시하기 전에 `match_explain` 으로 근거를 확인하세요.
-
----
-
-## 데이터카드 · `deal_card_create`
+## `deal_card_create` — 데이터카드
 
 건물 사진 위에 실측 수치를 얹은 4:5 카드(2160×2700)를 만듭니다. 홍보 문구는
 들어가지 않습니다 — 카드의 모든 글자가 실측값이거나 고정 라벨입니다.
@@ -360,6 +348,18 @@ uvx --from git+https://github.com/syleedlabs/deal-locator-mcp deal-locator-warm
   나가고 결국 다시 만들게 되기 때문입니다. 사진 경로를 주고 다시 부르거나,
   그대로 진행하려면 `allow_no_photo=true` 를 주세요.
 - 저장 위치는 `~/deal-locator-cards/<날짜>/` 입니다 (`DEAL_LOCATOR_CARD_DIR` 로 변경 가능).
+
+---
+
+## 매칭 신뢰도는 반드시 함께 읽으세요
+
+| 표기 | 뜻 |
+|---|---|
+| 확정 / 정확매칭 | 표제부 값이 정확히 일치 — 사실상 그 필지 |
+| 추정매칭 | 유사 스펙으로 좁힌 것 — **동일 스펙 인접 건물일 수 있습니다** |
+| 인접후보 | 후보 수준 — 확인 없이 인용하지 마세요 |
+
+`추정매칭` 이하를 고객에게 제시하기 전에 `match_explain` 으로 근거를 확인하세요.
 
 ---
 
