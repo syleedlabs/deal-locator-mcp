@@ -41,6 +41,7 @@
 - [한계 · 주의](#한계--주의)
 - [고지](#고지)
 - [라이선스](#라이선스)
+- [Star History](#star-history)
 
 </details>
 
@@ -508,3 +509,7 @@ License 1.1 입니다. 폰트에는 MIT 가 적용되지 않습니다 — [THIRD
 ## 문의
 
 디랩스(DLABS) · [github.com/syleedlabs](https://github.com/syleedlabs)
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=syleedlabs/deal-locator-mcp&type=Date)](https://star-history.com/#syleedlabs/deal-locator-mcp&Date)
