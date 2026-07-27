@@ -1028,12 +1028,18 @@ class RealEstateDataPipeline:
         if dong_name:
             df_api = self._fetch_pyoje_api(gu_name, dong_name)
             if not df_api.empty:
-                if disk:
+                # 오류로 잘린 부분수신본은 디스크에 굳히지 않는다(다음 조회 때 재시도).
+                # 이걸 저장하면 잘린 앵커풀이 staleness 기간 내내 조용히 복원율을 떨어뜨린다.
+                if disk and df_api.attrs.get("complete", True):
                     try:
                         disk.parent.mkdir(parents=True, exist_ok=True)
                         df_api.to_csv(disk, index=False, encoding="utf-8-sig")
                     except Exception as e:  # noqa: BLE001
                         logger.warning(f"표제부 디스크 캐시 저장 실패: {e}")
+                elif disk:
+                    logger.warning(
+                        f"표제부 부분수신({cache_key}) — 디스크 캐시 저장 건너뜀"
+                    )
                 self._evict_pyoje_cache()
                 self._pyoje_cache[cache_key] = df_api
                 return df_api
@@ -1151,6 +1157,7 @@ class RealEstateDataPipeline:
             # 뒤쪽 지번의 앵커 조회가 조용히 실패한다 → 상한 확대 + 절단 경고.
             max_pages = 100  # 최대 100페이지 (10,000건)
             total_count = 0
+            fetch_complete = True  # 오류로 중단되면 False — 부분수신본 캐시 방지
 
             while page <= max_pages:
                 params = {
@@ -1160,28 +1167,37 @@ class RealEstateDataPipeline:
                     "numOfRows": "100",
                     "pageNo": str(page),
                 }
-                # 페이지 단위 재시도 — 큰 동은 80페이지+ 라 중간 타임아웃 1회로
-                # 전체를 버리면 앵커가 전멸한다.
+                # 페이지 단위 재시도 — 큰 동은 80페이지+ 라 중간 타임아웃/5xx 1회로
+                # 전체를 버리면 앵커가 전멸한다. HTTP 5xx·429 는 data.go.kr 의
+                # 일시 장애이므로 지수 백오프로 재시도한다(비200 즉시 포기 금지).
+                import time as _time
                 resp = None
                 for attempt in range(3):
                     try:
                         resp = requests.get(url, params=params, timeout=15)
-                        break
                     except requests.RequestException as e:
-                        if attempt == 2:
-                            logger.warning(
-                                f"표제부 API 페이지 {page} 실패(3회): {e}"
-                            )
-                        else:
-                            import time as _time
-                            _time.sleep(1)
+                        resp = None
+                        if attempt < 2:
+                            _time.sleep(2 ** attempt)
+                            continue
+                        logger.warning(
+                            f"표제부 API 페이지 {page} 실패(3회): {e}"
+                        )
+                        break
+                    if resp.status_code in (429, 500, 502, 503, 504) and attempt < 2:
+                        _time.sleep(2 ** attempt)
+                        continue
+                    break
                 if resp is None:
+                    fetch_complete = False
                     break
 
                 if resp.status_code != 200:
                     logger.warning(
-                        f"표제부 API HTTP {resp.status_code}: {gu_name} {dong_name}"
+                        f"표제부 API HTTP {resp.status_code} (재시도 후): "
+                        f"{gu_name} {dong_name}"
                     )
+                    fetch_complete = False
                     break
 
                 try:
@@ -1190,6 +1206,7 @@ class RealEstateDataPipeline:
                     )
                 except Exception:
                     logger.warning(f"표제부 API XML 파싱 실패: {gu_name} {dong_name}")
+                    fetch_complete = False
                     break
 
                 header = data.get("response", {}).get("header", {})
@@ -1197,6 +1214,7 @@ class RealEstateDataPipeline:
                     logger.warning(
                         f"표제부 API 에러: {header.get('resultMsg')}"
                     )
+                    fetch_complete = False
                     break
 
                 body = data.get("response", {}).get("body", {})
@@ -1243,6 +1261,8 @@ class RealEstateDataPipeline:
                 f"표제부 API 조회: {gu_name} {dong_name} - {len(result)}건 "
                 f"(페이지 {page})"
             )
+            # 오류로 중단된 부분수신본은 캐시하지 말라는 신호(_load_pyoje_data 가 확인)
+            result.attrs["complete"] = fetch_complete
             return result
 
         except Exception as e:

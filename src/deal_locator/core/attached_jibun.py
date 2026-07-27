@@ -78,10 +78,21 @@ def fetch_attached_jibun(
                 "numOfRows": "100",
                 "pageNo": str(page),
             }
-            resp = requests.get(ATCH_JIBUN_URL, params=params, timeout=timeout)
+            # HTTP 5xx·429 는 data.go.kr 일시 장애 — 지수 백오프로 재시도한다.
+            # 여기서 즉시 None 을 반환하면 그 동의 부속지번 인덱스가 통째로 비어
+            # 다필지(합필) 대지면적 완화가 전면 비활성된다.
+            import time as _time
+            resp = None
+            for attempt in range(3):
+                resp = requests.get(ATCH_JIBUN_URL, params=params, timeout=timeout)
+                if resp.status_code in (429, 500, 502, 503, 504) and attempt < 2:
+                    _time.sleep(2 ** attempt)
+                    continue
+                break
             if resp.status_code != 200:
-                logger.warning(f"부속지번 API HTTP {resp.status_code}")
-                return None
+                logger.warning(f"부속지번 API HTTP {resp.status_code} (재시도 후)")
+                # 앞 페이지에서 이미 모은 쌍이 있으면 부분이라도 반환(전멸 방지)
+                return pairs if pairs else None
 
             try:
                 data = xmltodict.parse(
