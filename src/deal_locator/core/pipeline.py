@@ -655,10 +655,10 @@ class RealEstateDataPipeline:
             land_area = row.get("_대지면적")
             build_year = row.get("_건축년도")
 
-            if pd.isna(building_area) or pd.isna(build_year):
-                df.at[idx, "역매칭실패사유"] = (
-                    "연면적_결측" if pd.isna(building_area) else "건축년도_결측"
-                )
+            # 연면적 결측은 하드컷(평단가·스펙매칭 불가). 건축년도 결측은 컷하지
+            # 않고 match_single 의 P3(연면적+대지 동시 exact & 후보 유일)로만 회복.
+            if pd.isna(building_area):
+                df.at[idx, "역매칭실패사유"] = "연면적_결측"
                 continue
 
             # 1차: API 우선 표제부 조회 (+ 부속지번 주석: 다필지/필지세트)
@@ -837,6 +837,23 @@ class RealEstateDataPipeline:
                     reason_out.append("프리필터_탈락")
                 return None
 
+        # P3: 건축년도 결측 — 연면적+대지면적 동시 정확일치 & 후보 유일일 때만
+        # 추정매칭 복원(유일성 가드). 2개 이상이면 임의선택 금지 → 포기.
+        if pd.isna(build_year):
+            if not pd.isna(land_area):
+                p3 = df_pyoje[
+                    (df_pyoje["연면적_float"] == building_area)
+                    & (df_pyoje["대지면적_float"] == land_area)
+                ]
+                if len(p3) == 1:
+                    return self._extract_match(
+                        p3.iloc[0],
+                        "추정매칭: 연면적+대지 정확 (건축년도 결측·유일후보)",
+                    )
+            if reason_out is not None:
+                reason_out.append("건축년도_결측")
+            return None
+
         # Stage 1: 정확매칭 (연면적 + 대지면적 + 건축년도)
         if not pd.isna(land_area):
             exact = df_pyoje[
@@ -891,6 +908,22 @@ class RealEstateDataPipeline:
                 best = step3m.sort_values("_diff").iloc[0]
                 return self._extract_match(
                     best, f"3단계: 오차범위+-{tol*100:.0f}% (합필지·대지면적 생략)"
+                )
+
+        # P4: 연면적 ±tol 근접 + 건축년도 일치 + 대지면적 완화(비대칭) — 후보가
+        # 정확히 1개일 때만 복원(유일성 가드). 가각전제·도로편입 등으로 건축대지가
+        # 실거래 대지와 한방향으로 어긋난 필지를, 연면적 근접+년도 일치가 유일하면
+        # 대지 검사 없이 추정매칭 복원. 유일 아니면 아래 사유 기록으로.
+        if not pd.isna(land_area):
+            p4 = df_pyoje[
+                (df_pyoje["건축년도_매칭"] == build_year)
+                & (df_pyoje["연면적_float"] >= building_area * (1 - tol))
+                & (df_pyoje["연면적_float"] <= building_area * (1 + tol))
+            ]
+            if len(p4) == 1:
+                return self._extract_match(
+                    p4.iloc[0],
+                    f"추정매칭: 연면적±{tol*100:.0f}%·대지완화 (유일후보)",
                 )
 
         if reason_out is not None:
