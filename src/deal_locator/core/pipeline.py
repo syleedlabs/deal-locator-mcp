@@ -21,7 +21,7 @@ import pandas as pd
 
 from .attached_jibun import AttachedJibunIndex, fetch_attached_jibun
 from .config import PipelineConfig
-from .constants import API_TO_CSV_COLUMNS, SEOUL_GU_CODES
+from .constants import API_TO_CSV_COLUMNS, SEOUL_GU_CODES, redact_secrets
 from .matching import jibun_equal, masked_prefix_ok_any, norm_bunji
 
 logger = logging.getLogger("deal_locator.data_pipeline")
@@ -217,7 +217,7 @@ class RealEstateDataPipeline:
                     )
                     return result_path
             except Exception as e:
-                logger.warning(f"API 파이프라인 실패: {e}")
+                logger.warning(f"API 파이프라인 실패: {redact_secrets(e)}")
 
         # 3. 수동 CSV
         df_manual = self.load_manual_csv()
@@ -296,7 +296,7 @@ class RealEstateDataPipeline:
             from PublicDataReader import TransactionPrice
             tp = TransactionPrice(api_key)
         except Exception as e:
-            logger.error(f"TransactionPrice 초기화 실패: {e}")
+            logger.error(f"TransactionPrice 초기화 실패: {redact_secrets(e)}")
             return pd.DataFrame()
 
         now = datetime.now()
@@ -361,7 +361,7 @@ class RealEstateDataPipeline:
                         time.sleep(1)
                         logger.info(f"API 재시도 ({gu_name}): {attempt + 2}/{max_retries}")
                     else:
-                        logger.warning(f"API 조회 실패 ({gu_name}): {e} ({max_retries}회 시도)")
+                        logger.warning(f"API 조회 실패 ({gu_name}): {redact_secrets(e)} ({max_retries}회 시도)")
                     continue
 
         logger.info(f"API 조회 완료: {len(all_dfs)}개 구, API 호출 {api_calls}회")
@@ -441,7 +441,7 @@ class RealEstateDataPipeline:
                     logger.info(f"  -> 0건")
             except Exception as e:
                 fail_count += 1
-                logger.warning(f"  -> 실패: {e}")
+                logger.warning(f"  -> 실패: {redact_secrets(e)}")
                 continue
 
         # 실패율 체크
@@ -794,7 +794,7 @@ class RealEstateDataPipeline:
             try:
                 idx = self.load_attached_index(gu_name, dong_name)
             except Exception as e:  # noqa: BLE001 — 보강 데이터 실패는 치명 아님
-                logger.warning(f"부속지번 주석 실패({gu_name} {dong_name}): {e}")
+                logger.warning(f"부속지번 주석 실패({gu_name} {dong_name}): {redact_secrets(e)}")
 
         df_pyoje["_지번"] = bunji
         if idx is not None and len(idx) > 0:
@@ -1214,7 +1214,7 @@ class RealEstateDataPipeline:
                             _time.sleep(2 ** attempt)
                             continue
                         logger.warning(
-                            f"표제부 API 페이지 {page} 실패(3회): {e}"
+                            f"표제부 API 페이지 {page} 실패(3회): {redact_secrets(e)}"
                         )
                         break
                     if resp.status_code in (429, 500, 502, 503, 504) and attempt < 2:
@@ -1299,7 +1299,7 @@ class RealEstateDataPipeline:
             return result
 
         except Exception as e:
-            logger.warning(f"표제부 API 조회 실패 ({gu_name} {dong_name}): {e}")
+            logger.warning(f"표제부 API 조회 실패 ({gu_name} {dong_name}): {redact_secrets(e)}")
             return pd.DataFrame()
 
     def get_bdong_code(self, gu_name: str, dong_name: str) -> str:

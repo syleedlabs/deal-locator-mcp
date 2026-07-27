@@ -2,6 +2,19 @@
 
 from __future__ import annotations
 
+import re
+
+_SECRET_RE = re.compile(r"(serviceKey|ServiceKey|DecodingKey)=[^&\s'\"]+", re.IGNORECASE)
+
+
+def redact_secrets(text: object) -> str:
+    """로그·예외 문자열에서 인증키(serviceKey 등)를 마스킹한다.
+
+    requests/PublicDataReader 예외 문자열엔 '?serviceKey=<KEY>' 포함 전체 URL이
+    들어갈 수 있어, {e} 를 그대로 로깅하면 인증키가 로그에 남는다. 로깅 직전 감싼다.
+    """
+    return _SECRET_RE.sub(r"\1=<REDACTED>", str(text))
+
 # 서울특별시 25개 구 법정동코드 (5자리)
 SEOUL_GU_CODES: dict[str, str] = {
     "강남구": "11680",

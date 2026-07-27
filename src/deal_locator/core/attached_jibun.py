@@ -21,6 +21,8 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
+from .constants import redact_secrets
+
 logger = logging.getLogger("deal_locator.attached_jibun")
 
 ATCH_JIBUN_URL = "http://apis.data.go.kr/1613000/BldRgstHubService/getBrAtchJibunInfo"
@@ -126,7 +128,7 @@ def fetch_attached_jibun(
                 break
             page += 1
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"부속지번 API 조회 실패: {e}")
+        logger.warning(f"부속지번 API 조회 실패: {redact_secrets(e)}")
         return None
 
     if total_count > max_pages * 100:
