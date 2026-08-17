@@ -1768,25 +1768,49 @@ DEALS_EXPORT_OUTPUT_SCHEMA = {
             "description": "OK 일 때만 path 에 CSV 가 생성됐다.",
         },
         "message": {"type": "string"},
-        "path": {"type": "string", "description": "생성된 CSV 절대경로(utf-8-sig)"},
+        "path": {"type": "string",
+                 "description": "복원본 CSV 절대경로(utf-8-sig). match=false 면 원본 CSV"},
         "filename": {"type": "string"},
-        "rows": {"type": "integer", "description": "CSV 행 수(통건물만, 해제 포함)"},
+        "path_unmatched": {"type": "string",
+                           "description": "미복원본 CSV 경로 — 미복원 0건이거나 "
+                                          "match=false 면 빈 문자열"},
+        "filename_unmatched": {"type": "string"},
+        "rows_total": {"type": "integer",
+                       "description": "통건물 전체 행 수(해제 포함, 두 파일 합)"},
+        "rows_matched": {"type": ["integer", "null"],
+                         "description": "복원본 행 수 — match=false 면 null"},
+        "rows_unmatched": {"type": ["integer", "null"],
+                           "description": "미복원본 행 수 — match=false 면 null"},
+        "confidence_breakdown": {
+            "type": "object",
+            "description": "복원본의 매칭신뢰도별 건수(정확매칭/추정매칭/지번공개)"},
         "months": {"type": "array", "items": {"type": "string"},
                    "description": "내보낸 연월(YYYYMM) 목록"},
         "gu_scope": {"type": "string", "description": "'서울전역' 또는 구 이름"},
-        "per_gu": {"type": "object", "description": "구별 행 수"},
+        "per_gu": {"type": "object", "description": "구별 전체 행 수"},
         "jiphap_excluded": {"type": "integer",
                             "description": "취급 범위 밖이라 제외한 집합(구분상가) 건수"},
         "cancelled_count": {"type": "integer",
                             "description": "해제신고 건수 — 행은 남아 있고 컬럼으로 구분"},
         "masked_count": {"type": "integer", "description": "지번 마스킹 거래 건수"},
         "match": {"type": "boolean"},
-        "matched_count": {"type": ["integer", "null"],
-                          "description": "match=true 일 때 역매칭으로 지번이 복원된 건수"},
         "source": {"type": "string"},
     },
-    "required": ["status", "path", "rows", "months", "gu_scope", "source"],
+    "required": ["status", "path", "rows_total", "months", "gu_scope", "source"],
 }
+
+# 매칭단계 문자열 → 파이프라인 표준 신뢰도 등급.
+# CONFIDENCE(matching.py) 정본과 같은 어휘: 1·2단계 = 정확매칭,
+# 3단계·추정 = 추정매칭. 비마스킹 행은 지번이 애초에 공개라 '지번공개'.
+def _stage_confidence(stage: str, masked: bool) -> str:
+    s = str(stage).strip()
+    if not masked:
+        return "지번공개"
+    if s.startswith(("1단계", "2단계", "지번매칭")):
+        return "정확매칭"
+    if s.startswith(("3단계", "추정매칭")):
+        return "추정매칭"
+    return ""
 
 _YM_RE = re.compile(r"^\d{6}$")
 _EXPORT_MAX_MONTHS = 24
@@ -1797,11 +1821,12 @@ def _export_out_dir() -> Path:
 
     카드(_card_out_dir)와 같은 이유로 홈 아래 고정 경로가 기본이다 —
     서버 cwd 는 MCP 클라이언트가 정하므로 상대경로는 사용자가 못 찾는다.
+    카드와 달리 **날짜 하위폴더를 만들지 않는다** — 이 CSV 는 파이프라인이
+    집어가는 원천 데이터라 경로가 실행일과 무관하게 예측 가능해야 하고,
+    같은 연월 재실행은 같은 파일을 덮어쓰는 게(멱등) 적재에 안전하다.
     """
-    from datetime import date
     env = os.environ.get("DEAL_LOCATOR_EXPORT_DIR", "").strip()
-    root = Path(env).expanduser() if env else (Path.home() / "deal-locator-exports")
-    return root / date.today().isoformat()
+    return Path(env).expanduser() if env else (Path.home() / "deal-locator-exports")
 
 
 def _ym_parse(ym: str) -> Optional[tuple[int, int]]:
@@ -1818,9 +1843,12 @@ def _deals_export_payload(year_month: str, year_month_to: str,
                           gu: str, match: bool) -> dict[str, Any]:
     d: dict[str, Any] = {
         "status": "NOT_FOUND", "message": "", "path": "", "filename": "",
-        "rows": 0, "months": [], "gu_scope": gu or "서울전역", "per_gu": {},
+        "path_unmatched": "", "filename_unmatched": "",
+        "rows_total": 0, "rows_matched": None, "rows_unmatched": None,
+        "confidence_breakdown": {},
+        "months": [], "gu_scope": gu or "서울전역", "per_gu": {},
         "jiphap_excluded": 0, "cancelled_count": 0, "masked_count": 0,
-        "match": bool(match), "matched_count": None, "source": SOURCE_LINE,
+        "match": bool(match), "source": SOURCE_LINE,
     }
     if not _key_ok():
         d.update(status="CONFIG_ERROR", message=KEY_MISSING_MSG)
@@ -1895,26 +1923,60 @@ def _deals_export_payload(year_month: str, year_month_to: str,
     d["masked_count"] = int(masked.sum())
     cancel = norm["해제사유발생일"].fillna("").astype(str).str.strip()
     d["cancelled_count"] = int(((cancel != "") & (cancel != "-")).sum())
-
-    if match:
-        # 역매칭은 동별 표제부 전체를 받는다 — 콜드 캐시면 수 분 이상 걸린다.
-        with _quiet_stdout():
-            norm = p.bulk_match(norm)
-        stage = norm["매칭단계"].astype(str).str.strip()
-        d["matched_count"] = int((stage != "")[masked].sum())
+    d["rows_total"] = int(len(norm))
 
     gu_series = norm["시군구"].astype(str).str.extract(r"(\S+구)", expand=False)
     d["per_gu"] = {g: int(n) for g, n in gu_series.value_counts().items()}
 
     span_txt = months[0] if len(months) == 1 else f"{months[0]}-{months[-1]}"
-    fname = (f"실거래_통건물_{_safe_stem(d['gu_scope'])}_{span_txt}"
-             f"{'_역매칭' if match else ''}.csv")
+    base = f"실거래_통건물_{_safe_stem(d['gu_scope'])}_{span_txt}"
     out_dir = _export_out_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / fname
-    norm.to_csv(out_path, index=False, encoding="utf-8-sig")
 
-    d.update(status="OK", path=str(out_path), filename=fname, rows=int(len(norm)))
+    if not match:
+        # 원본 모드: 국토부 원본 그대로 1파일 (지번 마스킹 유지)
+        fname = f"{base}_원본.csv"
+        out_path = out_dir / fname
+        norm.to_csv(out_path, index=False, encoding="utf-8-sig")
+        d.update(status="OK", path=str(out_path), filename=fname)
+        return d
+
+    # 역매칭 모드(기본): 동별 표제부 전체를 받는다 — 콜드 캐시면 수십 분.
+    with _quiet_stdout():
+        norm = p.bulk_match(norm)
+
+    stage = norm["매칭단계"].astype(str).str.strip()
+    # 파이프라인 표준 파생 컬럼 — 원본(마스킹 지번)은 그대로 두고 옆에 붙인다.
+    norm["매칭신뢰도"] = [
+        _stage_confidence(s, m) for s, m in zip(stage, masked)
+    ]
+    addr = norm["대지위치_표제부"].fillna("").astype(str).str.strip()
+    norm["복원지번"] = addr.str.extract(r"(\d+(?:-\d+)?)(?:번지)?$", expand=False).fillna("")
+    # 비마스킹 행은 원지번이 곧 확정 지번
+    own = norm["지번"].astype(str).str.extract(r"(\d+(?:-\d+)?)\s*$", expand=False).fillna("")
+    norm.loc[~masked & (norm["복원지번"] == ""), "복원지번"] = own[~masked]
+
+    # 미복원 = 마스킹인데 매칭단계가 비어 있는 행. 나머지는 전부 복원본.
+    unmatched_mask = masked & (stage == "")
+    df_matched = norm[~unmatched_mask]
+    df_unmatched = norm[unmatched_mask].drop(columns=["매칭신뢰도", "복원지번"],
+                                             errors="ignore")
+
+    fname = f"{base}_복원.csv"
+    out_path = out_dir / fname
+    df_matched.to_csv(out_path, index=False, encoding="utf-8-sig")
+    d.update(status="OK", path=str(out_path), filename=fname,
+             rows_matched=int(len(df_matched)),
+             rows_unmatched=int(len(df_unmatched)))
+    d["confidence_breakdown"] = {
+        k: int(v) for k, v in
+        df_matched["매칭신뢰도"].value_counts().items() if k
+    }
+    if len(df_unmatched) > 0:
+        fname_u = f"{base}_미복원.csv"
+        out_path_u = out_dir / fname_u
+        df_unmatched.to_csv(out_path_u, index=False, encoding="utf-8-sig")
+        d.update(path_unmatched=str(out_path_u), filename_unmatched=fname_u)
     return d
 
 
@@ -1925,18 +1987,24 @@ def _render_deals_export(d: dict[str, Any]) -> str:
         return f"{NOT_FOUND} {d['message']} {NO_GUESS}"
 
     span = d["months"][0] if len(d["months"]) == 1 else f"{d['months'][0]}~{d['months'][-1]}"
-    lines = [f"■ 실거래 CSV 내보내기 — {d['gu_scope']} {span} (통건물)",
-             f"  파일: {d['path']}",
-             f"  행수: {d['rows']:,}건 (해제신고 {d['cancelled_count']}건 포함·컬럼으로 구분)"]
+    lines = [f"■ 실거래 CSV 내보내기 — {d['gu_scope']} {span} (통건물)"]
+    if d["match"]:
+        cb = d["confidence_breakdown"]
+        cb_txt = " · ".join(f"{k} {v:,}건" for k, v in
+                            sorted(cb.items(), key=lambda kv: -kv[1]))
+        lines.append(f"  복원본: {d['path']} — {d['rows_matched']:,}건"
+                     + (f" ({cb_txt})" if cb_txt else ""))
+        if d["path_unmatched"]:
+            lines.append(f"  미복원본: {d['path_unmatched']} — {d['rows_unmatched']:,}건"
+                         " (금액·면적은 실측, 지번만 미확정)")
+        else:
+            lines.append("  미복원 0건 — 전량 복원됨")
+    else:
+        lines.append(f"  원본: {d['path']} — {d['rows_total']:,}건 (지번 마스킹 유지)")
+    lines.append(f"  전체 {d['rows_total']:,}건 · 해제신고 {d['cancelled_count']}건 포함"
+                 "(해제사유발생일 컬럼으로 구분)")
     if d["jiphap_excluded"]:
         lines.append(f"  ※ 집합(구분상가) {d['jiphap_excluded']:,}건은 취급 범위 밖이라 제외(v1)")
-    if d["masked_count"]:
-        note = f"  ※ 지번 마스킹 {d['masked_count']:,}건"
-        if d["match"] and d["matched_count"] is not None:
-            note += f" — 역매칭으로 {d['matched_count']:,}건 복원(매칭단계 컬럼 참조)"
-        else:
-            note += " — 역매칭 없이 원본 그대로(match=true 로 복원 가능)"
-        lines.append(note)
     top = sorted(d["per_gu"].items(), key=lambda kv: -kv[1])[:5]
     if len(d["per_gu"]) > 1 and top:
         lines.append("  구별 상위: " + " · ".join(f"{g} {n}건" for g, n in top))
@@ -1950,24 +2018,32 @@ def deals_export(
     year_month: str,
     year_month_to: str = "",
     gu: str = "",
-    match: bool = False,
+    match: bool = True,
 ) -> ToolResult:
     """연월(YYYYMM)을 지정해 서울 전역(또는 한 구)의 상업업무용 통건물 실거래를
-    CSV 파일로 내려받는다.
+    **마스킹 지번을 역매칭으로 복원한 CSV**로 내려받는다. DB·분석 파이프라인의
+    원천 데이터 용도다.
 
     year_month 하나면 그 달, year_month_to 까지 주면 범위(최대 24개월)다.
     gu 를 주면 그 구만(예: '강남구'), 비우면 서울 25개 구 전체를 내보낸다.
+
+    기본(match=true)은 **복원본·미복원본 2파일**로 나온다:
+      복원본(…_복원.csv) — 지번이 특정된 거래. 원본 마스킹 지번은 그대로 두고
+        복원지번·대지위치_표제부·도로명대지위치_표제부·매칭단계·매칭신뢰도
+        (정확매칭/추정매칭) 컬럼을 추가. 추정매칭 행은 동일 스펙 인접 건물일
+        가능성이 있으니 하류에서 매칭신뢰도로 필터할 것.
+      미복원본(…_미복원.csv) — 지번 특정 실패 거래(역매칭실패사유 포함).
+        금액·면적은 실측이므로 버리지 말 것. 0건이면 파일을 만들지 않는다.
+    **콜드 캐시면 동별 표제부 수신에 수 분~수십 분** 걸린다(캐시 후 수 분).
+    match=false 면 역매칭 없이 국토부 원본 1파일(…_원본.csv, 수십 초).
+
     집합(구분상가)은 취급 범위 밖이라 제외되며 건수만 보고한다(v1).
     해제신고 거래는 행으로 남긴다 — '해제사유발생일' 컬럼으로 구분할 것.
 
-    match=true 면 마스킹 지번을 표제부 역매칭으로 복원해 '대지위치_표제부'·
-    '매칭단계' 컬럼을 채운다. **콜드 캐시면 동별 표제부 수신에 수 분~수십 분**
-    걸리니, 사용자가 지번 복원까지 원할 때만 켤 것. 기본(false)은 국토부 원본
-    그대로라 서울 전역 1개월이 수십 초 안에 끝난다.
-
-    저장 위치는 ~/deal-locator-exports/<날짜>/ (DEAL_LOCATOR_EXPORT_DIR 로 변경
-    가능), 인코딩은 utf-8-sig(엑셀 호환)다. 같은 인자로 다시 부르면 같은 파일을
-    덮어쓴다(멱등).
+    저장 위치는 ~/deal-locator-exports/ 고정(DEAL_LOCATOR_EXPORT_DIR 로 변경
+    가능, 날짜 하위폴더 없음 — 파이프라인이 집어가기 좋게 경로가 실행일과
+    무관하다). 인코딩은 utf-8-sig(엑셀 호환). 같은 인자로 다시 부르면 같은
+    파일을 덮어쓴다(멱등).
     """
     data = _deals_export_payload(year_month, year_month_to, gu, match)
     return ToolResult(content=_render_deals_export(data), structured_content=data,

@@ -1,9 +1,13 @@
 """deals_export — 연월 지정 서울 전역 실거래 CSV 내보내기 계약 테스트.
 
-네트워크·API 키 없이 돈다:
-  · get_pipeline() 을 실제 파이프라인 인스턴스 + fetch_month_cached 페이크로 대체
-    (normalize_columns·filter_ilban 은 실물을 그대로 태워 스키마 회귀를 잡는다)
-  · match=True 경로는 bulk_match 스파이로 검사 (표제부 API 차단)
+계약(사용자 인터뷰로 확정, 2026-08):
+  · 기본 동작 = 역매칭(match=True) → 복원본 + 미복원본 2파일
+  · 원본 마스킹 지번 유지 + 복원지번·매칭신뢰도 등 파생 컬럼 추가
+  · 해제신고 행은 각 파일에 남기고 '해제사유발생일' 컬럼으로 구분
+  · 고정 폴더(날짜 하위폴더 없음) + 연월 파일명 → 재실행 멱등 덮어쓰기
+  · match=False = 원본 1파일 탈출구
+
+네트워크·API 키 없이 돈다: 실제 파이프라인 인스턴스에 fetch/bulk 페이크.
 """
 
 from __future__ import annotations
@@ -21,26 +25,23 @@ from deal_locator.core.pipeline import RealEstateDataPipeline
 
 
 def _raw_rows(gu: str, ym: str) -> pd.DataFrame:
-    """국토부 API 원본 형태의 월·구 거래 3건: 통건물 마스킹 / 집합 / 통건물 해제."""
+    """국토부 API 원본 형태 4건: 통건물 3(정확복원/추정복원/미복원·해제) + 집합 1."""
+    def row(jibun, kind, area, land, year, cancel=None, share=None):
+        return {"시군구": gu, "법정동": "역삼동", "지번": jibun, "건물유형": kind,
+                "거래금액": "500000", "계약년도": ym[:4], "계약월": str(int(ym[4:])),
+                "계약일": "14", "건물면적": area, "대지면적": land,
+                "건축년도": year, "해제사유발생일": cancel, "shareDealingType": share}
     return pd.DataFrame([
-        {"시군구": gu, "법정동": "역삼동", "지번": "6**", "건물유형": "일반",
-         "거래금액": "500000", "계약년도": ym[:4], "계약월": str(int(ym[4:])),
-         "계약일": "14", "건물면적": "1000.5", "대지면적": "300.2",
-         "건축년도": "1995", "해제사유발생일": None, "shareDealingType": None},
-        {"시군구": gu, "법정동": "역삼동", "지번": "736-14", "건물유형": "집합",
-         "거래금액": "80000", "계약년도": ym[:4], "계약월": str(int(ym[4:])),
-         "계약일": "20", "건물면적": "84.2", "대지면적": "12.1",
-         "건축년도": "2005", "해제사유발생일": None, "shareDealingType": None},
-        {"시군구": gu, "법정동": "역삼동", "지번": "7**", "건물유형": "일반",
-         "거래금액": "310000", "계약년도": ym[:4], "계약월": str(int(ym[4:])),
-         "계약일": "02", "건물면적": "800.0", "대지면적": "250.0",
-         "건축년도": "1988", "해제사유발생일": "26.01.30", "shareDealingType": "지분"},
+        row("6**", "일반", "1000.5", "300.2", "1995"),
+        row("8**", "일반", "820.0", "210.0", "2001"),
+        row("7**", "일반", "41.12", "11.84", "1988", cancel="26.01.30", share="지분"),
+        row("736-14", "집합", "84.2", "12.1", "2005"),
     ])
 
 
 @pytest.fixture
 def fake_pipe(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    """실제 파이프라인 인스턴스에 fetch 페이크를 얹고 호출 기록을 남긴다."""
+    """실제 파이프라인 인스턴스에 fetch/bulk 페이크를 얹고 호출을 기록한다."""
     box: dict[str, Any] = {"fetch_calls": [], "bulk_calls": 0}
     p = RealEstateDataPipeline()
 
@@ -49,10 +50,22 @@ def fake_pipe(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         return _raw_rows(gu, ym)
 
     def _fake_bulk(df: pd.DataFrame) -> pd.DataFrame:
+        # 6** → 정확매칭, 8** → 추정매칭, 7** → 미복원 (실엔진 축소 모형)
         box["bulk_calls"] += 1
         out = df.copy()
-        out["매칭단계"] = "1단계: 정확매칭"
-        out["대지위치_표제부"] = "서울특별시 강남구 역삼동 601"
+        for col in ("매칭단계", "대지위치_표제부", "역매칭실패사유"):
+            if col not in out.columns:
+                out[col] = ""
+        for idx, r in out.iterrows():
+            jib = str(r["지번"])
+            if "6**" in jib:
+                out.at[idx, "매칭단계"] = "1단계: 정확매칭"
+                out.at[idx, "대지위치_표제부"] = "서울특별시 강남구 역삼동 601-5번지"
+            elif "8**" in jib:
+                out.at[idx, "매칭단계"] = "추정매칭: 비율일치 (유일후보)"
+                out.at[idx, "대지위치_표제부"] = "서울특별시 강남구 역삼동 823"
+            elif "7**" in jib:
+                out.at[idx, "역매칭실패사유"] = "지분_비율불일치"
         return out
 
     monkeypatch.setattr(p, "fetch_month_cached", _fake_fetch)
@@ -73,8 +86,13 @@ def _call(**kw: Any) -> dict[str, Any]:
     kw.setdefault("year_month", "202607")
     kw.setdefault("year_month_to", "")
     kw.setdefault("gu", "")
-    kw.setdefault("match", False)
+    kw.setdefault("match", True)
     return S._deals_export_payload(**kw)
+
+
+def _read(path: str) -> list[dict[str, str]]:
+    with open(path, encoding="utf-8-sig") as f:
+        return list(csv.DictReader(f))
 
 
 # ── 입력 검증 ─────────────────────────────────────────────────────────
@@ -87,34 +105,29 @@ def test_연월_형식이_아니면_PARSE_ERROR(fake_pipe, bad) -> None:
 
 
 def test_범위_역순이면_PARSE_ERROR(fake_pipe) -> None:
-    d = _call(year_month="202607", year_month_to="202601")
-    assert d["status"] == "PARSE_ERROR"
+    assert _call(year_month="202607", year_month_to="202601")["status"] == "PARSE_ERROR"
 
 
 def test_범위_24개월_초과는_PARSE_ERROR(fake_pipe) -> None:
     d = _call(year_month="202301", year_month_to="202607")
-    assert d["status"] == "PARSE_ERROR"
-    assert "24" in d["message"]
+    assert d["status"] == "PARSE_ERROR" and "24" in d["message"]
 
 
 def test_모르는_구는_PARSE_ERROR(fake_pipe) -> None:
-    d = _call(gu="부산진구")
-    assert d["status"] == "PARSE_ERROR"
+    assert _call(gu="부산진구")["status"] == "PARSE_ERROR"
 
 
 def test_키없으면_CONFIG_ERROR(monkeypatch, fake_pipe) -> None:
     monkeypatch.delenv("DEAL_LOCATOR_SERVICE_KEY", raising=False)
     monkeypatch.delenv("DATA_GO_KR_API_KEY", raising=False)
-    d = _call()
-    assert d["status"] == "CONFIG_ERROR"
+    assert _call()["status"] == "CONFIG_ERROR"
 
 
 # ── 범위·스코프 ────────────────────────────────────────────────────────
 
 def test_전역구는_25개_구를_모두_조회한다(fake_pipe) -> None:
     _call()
-    gus = {g for _, g in fake_pipe["fetch_calls"]}
-    assert gus == set(SEOUL_GU_CODES)
+    assert {g for _, g in fake_pipe["fetch_calls"]} == set(SEOUL_GU_CODES)
 
 
 def test_단일_구_지정시_그_구만_조회한다(fake_pipe) -> None:
@@ -125,34 +138,95 @@ def test_단일_구_지정시_그_구만_조회한다(fake_pipe) -> None:
 
 def test_범위지정시_모든_월을_조회한다(fake_pipe) -> None:
     d = _call(year_month="202511", year_month_to="202602", gu="강남구")
-    yms = [ym for ym, _ in fake_pipe["fetch_calls"]]
-    assert yms == ["202511", "202512", "202601", "202602"]
     assert d["months"] == ["202511", "202512", "202601", "202602"]
 
 
-# ── 필터·집계 계약 ────────────────────────────────────────────────────
+# ── 기본 = 역매칭 · 2파일 분리 ────────────────────────────────────────
 
-def test_통건물만_남기고_집합은_제외_건수로_보고한다(fake_pipe) -> None:
+def test_기본은_역매칭이다(fake_pipe) -> None:
+    _call(gu="강남구")
+    assert fake_pipe["bulk_calls"] == 1
+
+
+def test_복원본과_미복원본_2파일로_나뉜다(fake_pipe) -> None:
     d = _call(gu="강남구")
     assert d["status"] == "OK"
-    assert d["rows"] == 2                 # 일반 2건 (집합 1건 제외)
-    assert d["jiphap_excluded"] == 1
+    assert d["rows_total"] == 3 and d["rows_matched"] == 2 and d["rows_unmatched"] == 1
+    assert "복원" in d["filename"] and "미복원" in d["filename_unmatched"]
+    assert len(_read(d["path"])) == 2
+    assert len(_read(d["path_unmatched"])) == 1
 
 
-def test_해제거래는_행으로_남기고_건수만_보고한다(fake_pipe, _env) -> None:
+def test_복원본은_원본_지번을_유지하고_파생컬럼을_추가한다(fake_pipe) -> None:
+    d = _call(gu="강남구")
+    rows = {r["지번"].split()[-1]: r for r in _read(d["path"])}
+    exact = rows["6**"]
+    assert exact["지번"].endswith("6**"), "원본 마스킹 지번이 사라졌다"
+    assert exact["복원지번"] == "601-5"
+    assert exact["매칭신뢰도"] == "정확매칭"
+    assert rows["8**"]["매칭신뢰도"] == "추정매칭"
+    assert rows["8**"]["복원지번"] == "823"
+
+
+def test_신뢰도_분해를_보고한다(fake_pipe) -> None:
+    d = _call(gu="강남구")
+    assert d["confidence_breakdown"] == {"정확매칭": 1, "추정매칭": 1}
+
+
+def test_미복원본에는_실패사유가_있고_파생컬럼은_없다(fake_pipe) -> None:
+    d = _call(gu="강남구")
+    (row,) = _read(d["path_unmatched"])
+    assert row["역매칭실패사유"] == "지분_비율불일치"
+    assert "매칭신뢰도" not in row and "복원지번" not in row
+
+
+def test_미복원_0건이면_미복원_파일을_만들지_않는다(fake_pipe, monkeypatch, _env) -> None:
+    def _all_match(df):
+        out = df.copy()
+        out["매칭단계"] = "1단계: 정확매칭"
+        out["대지위치_표제부"] = "서울특별시 강남구 역삼동 601"
+        return out
+    monkeypatch.setattr(fake_pipe["pipe"], "bulk_match", _all_match)
+    d = _call(gu="강남구")
+    assert d["rows_unmatched"] == 0 and d["path_unmatched"] == ""
+    assert not any("미복원" in p.name for p in Path(_env).glob("*.csv"))
+
+
+def test_해제거래는_행으로_남고_건수를_보고한다(fake_pipe) -> None:
     d = _call(gu="강남구")
     assert d["cancelled_count"] == 1
-    with open(d["path"], encoding="utf-8-sig") as f:
-        rows = list(csv.DictReader(f))
-    assert len(rows) == d["rows"]
-    assert any((r.get("해제사유발생일") or "").strip() for r in rows), \
+    all_rows = _read(d["path"]) + _read(d["path_unmatched"])
+    assert any((r.get("해제사유발생일") or "").strip() for r in all_rows), \
         "해제 거래가 CSV 에서 사라졌다 — 데이터 다운로드는 행을 지우면 안 된다"
 
 
-def test_CSV_행수와_payload_rows_가_일치한다(fake_pipe, _env) -> None:
+# ── 원본 모드 탈출구 ──────────────────────────────────────────────────
+
+def test_match_false_면_원본_1파일이고_역매칭하지_않는다(fake_pipe) -> None:
+    d = _call(gu="강남구", match=False)
+    assert fake_pipe["bulk_calls"] == 0
+    assert d["rows_matched"] is None and d["path_unmatched"] == ""
+    assert "원본" in d["filename"]
+    rows = _read(d["path"])
+    assert len(rows) == d["rows_total"] == 3
+    assert "매칭신뢰도" not in rows[0]
+
+
+# ── 필터·경로·집계 ────────────────────────────────────────────────────
+
+def test_통건물만_남기고_집합은_제외_건수로_보고한다(fake_pipe) -> None:
+    d = _call(gu="강남구")
+    assert d["rows_total"] == 3 and d["jiphap_excluded"] == 1
+
+
+def test_전역_행수는_구별_합과_같다(fake_pipe) -> None:
     d = _call()
-    with open(d["path"], encoding="utf-8-sig") as f:
-        assert len(list(csv.DictReader(f))) == d["rows"] == 50  # 25구 × 일반 2건
+    assert d["rows_total"] == 75 == sum(d["per_gu"].values())  # 25구 × 통건물 3건
+
+
+def test_고정폴더에_저장한다_날짜_하위폴더_없음(fake_pipe, _env) -> None:
+    d = _call(gu="강남구")
+    assert Path(d["path"]).parent == Path(_env), "날짜 하위폴더가 생겼다 — 파이프라인 경로 예측 불가"
 
 
 def test_파일명에_스코프와_연월이_들어간다(fake_pipe) -> None:
@@ -162,26 +236,10 @@ def test_파일명에_스코프와_연월이_들어간다(fake_pipe) -> None:
     assert "서울전역" in d2["filename"] and "202607" in d2["filename"]
 
 
-def test_마스킹_건수를_보고한다(fake_pipe) -> None:
-    d = _call(gu="강남구")
-    assert d["masked_count"] == 2         # 6**, 7**
-
-
-# ── 역매칭 옵션 ───────────────────────────────────────────────────────
-
-def test_기본은_역매칭을_하지_않는다(fake_pipe) -> None:
-    d = _call(gu="강남구")
-    assert fake_pipe["bulk_calls"] == 0
-    assert d["match"] is False and d["matched_count"] is None
-
-
-def test_match_true_면_역매칭하고_복원_건수를_보고한다(fake_pipe, _env) -> None:
-    d = _call(gu="강남구", match=True)
-    assert fake_pipe["bulk_calls"] == 1
-    assert d["match"] is True and d["matched_count"] == 2
-    with open(d["path"], encoding="utf-8-sig") as f:
-        rows = list(csv.DictReader(f))
-    assert all(r["매칭단계"] for r in rows), "역매칭 컬럼이 CSV 에 없다"
+def test_재실행은_같은_경로를_덮어쓴다(fake_pipe) -> None:
+    d1 = _call(gu="강남구")
+    d2 = _call(gu="강남구")
+    assert d1["path"] == d2["path"] and d1["rows_total"] == d2["rows_total"]
 
 
 # ── 데이터 부재 ───────────────────────────────────────────────────────
@@ -190,8 +248,7 @@ def test_거래없음은_NOT_FOUND_이고_파일을_쓰지_않는다(fake_pipe, 
     monkeypatch.setattr(fake_pipe["pipe"], "fetch_month_cached",
                         lambda ym, gu: pd.DataFrame())
     d = _call(gu="강남구")
-    assert d["status"] == "NOT_FOUND"
-    assert d["path"] == ""
+    assert d["status"] == "NOT_FOUND" and d["path"] == ""
     assert list(Path(_env).rglob("*.csv")) == []
 
 
