@@ -484,7 +484,7 @@ uvx --from git+https://github.com/syleedlabs/deal-locator-mcp deal-locator-warm
 ```
 deal-locator-mcp/
 ├─ src/deal_locator/
-│  ├─ server.py           MCP 서버 — 도구 6종 정의 · 구조화 출력
+│  ├─ server.py           MCP 서버 — 도구 7종 정의 · 구조화 출력
 │  ├─ core/               매칭 엔진 (표제부 역매칭 · 부속지번 · 파이프라인)
 │  └─ render/             데이터카드 렌더 (템플릿 + Pretendard 폰트)
 ├─ tests/                 114개
