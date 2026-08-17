@@ -8,17 +8,23 @@
 > "어느 건물인지 모른다"에서 멈출 때, deal-locator는 건축물대장 표제부로 **역매칭해 그
 > 건물을 되짚고**, 그 위에 시세 · 이력 · 콘텐츠를 얹은 올인원 도구입니다.
 
+![Version](https://img.shields.io/badge/version-1.3.0-f59e0b)
 ![Author](https://img.shields.io/badge/author-DLABS-1f2937)
-![Tools](https://img.shields.io/badge/MCP_도구-6종-2563eb)
+![Tools](https://img.shields.io/badge/MCP_도구-7종-2563eb)
 ![Data](https://img.shields.io/badge/데이터-국토부_·_건축HUB-0ea5e9)
 ![Platform](https://img.shields.io/badge/platform-Claude_Desktop_·_Claude_Code-7c3aed)
 ![License](https://img.shields.io/badge/license-MIT-16a34a)
+
+> **🆕 v1.3 (2026-08)** — ① 매칭 엔진 v2: 지분거래 비율매칭·자릿수 프리필터 등으로
+> 마스킹 지번 복원율 **84%**(서울 25개 구 전수, 오매칭 0) ② 새 도구
+> [`deals_export`](#7-deals_export--실거래-csv-내보내기): 연월 지정 서울 전역 실거래를
+> **지번 복원된 CSV**로 다운로드 ③ 건축HUB API 응답 형식 변경(2026-08) 대응.
 
 ---
 
 ## 목차
 
-**처음이라면** → [1분 요약](#1분-요약--이게-뭔가요) · [다루는 범위](#다루는-범위-v1) · [설치](#설치) · [도구 6종](#도구-6종)
+**처음이라면** → [1분 요약](#1분-요약--이게-뭔가요) · [다루는 범위](#다루는-범위-v1) · [설치](#설치) · [도구 7종](#도구-7종)
 **쓰다가 막히면** → [매칭 신뢰도](#매칭-신뢰도는-반드시-함께-읽으세요) · [FAQ](#faq) · [한계 · 주의](#한계--주의)
 
 <details>
