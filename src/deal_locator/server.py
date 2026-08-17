@@ -83,9 +83,11 @@ mcp = FastMCP(
         "응답의 매칭 신뢰도(확정/정확매칭/추정매칭)를 반드시 함께 전달하고, "
         "추정매칭은 동일 스펙 인접 건물일 가능성을 사용자에게 고지할 것. "
         f"{NOT_FOUND} 응답이면 데이터가 없는 것 — 수치를 지어내지 말 것. "
-        "5개 도구 모두 읽기 전용이며 structuredContent 를 반환한다 — 계산·인용 시 "
+        "모든 도구가 structuredContent 를 반환한다 — 계산·인용 시 "
         "텍스트가 아니라 구조화 필드를 읽을 것: status='OK' 일 때만 실측값이 있고, "
         "area_scan 은 coverage(모수 분해)를 함께 확인해 표본 대표성을 판단할 것. "
+        "쓰기 도구는 2종뿐이다 — deal_card_create(카드 PNG)와 deals_export"
+        "(연월 지정 실거래 CSV 다운로드, 파일 생성 외 부작용 없음). "
         "이 도구의 결과는 참고자료이지 중개대상물 확인·설명서가 아니다 — "
         "사용자가 고객에게 제시할 목적이면 원문(실거래가 공개시스템·건축물대장)을 "
         "직접 확인하도록 안내할 것."
@@ -1754,6 +1756,224 @@ def deal_card_create(
                       or data["status"] == "RENDER_ERROR")
 
 
+# ── deals_export: 연월 지정 실거래 CSV 내보내기 ──
+
+DEALS_EXPORT_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "status": {
+            "type": "string",
+            "enum": ["OK", "NOT_FOUND", "PARSE_ERROR", "CONFIG_ERROR",
+                     "EXTERNAL_API_ERROR"],
+            "description": "OK 일 때만 path 에 CSV 가 생성됐다.",
+        },
+        "message": {"type": "string"},
+        "path": {"type": "string", "description": "생성된 CSV 절대경로(utf-8-sig)"},
+        "filename": {"type": "string"},
+        "rows": {"type": "integer", "description": "CSV 행 수(통건물만, 해제 포함)"},
+        "months": {"type": "array", "items": {"type": "string"},
+                   "description": "내보낸 연월(YYYYMM) 목록"},
+        "gu_scope": {"type": "string", "description": "'서울전역' 또는 구 이름"},
+        "per_gu": {"type": "object", "description": "구별 행 수"},
+        "jiphap_excluded": {"type": "integer",
+                            "description": "취급 범위 밖이라 제외한 집합(구분상가) 건수"},
+        "cancelled_count": {"type": "integer",
+                            "description": "해제신고 건수 — 행은 남아 있고 컬럼으로 구분"},
+        "masked_count": {"type": "integer", "description": "지번 마스킹 거래 건수"},
+        "match": {"type": "boolean"},
+        "matched_count": {"type": ["integer", "null"],
+                          "description": "match=true 일 때 역매칭으로 지번이 복원된 건수"},
+        "source": {"type": "string"},
+    },
+    "required": ["status", "path", "rows", "months", "gu_scope", "source"],
+}
+
+_YM_RE = re.compile(r"^\d{6}$")
+_EXPORT_MAX_MONTHS = 24
+
+
+def _export_out_dir() -> Path:
+    """CSV 저장 폴더. `DEAL_LOCATOR_EXPORT_DIR` 로 재정의 가능.
+
+    카드(_card_out_dir)와 같은 이유로 홈 아래 고정 경로가 기본이다 —
+    서버 cwd 는 MCP 클라이언트가 정하므로 상대경로는 사용자가 못 찾는다.
+    """
+    from datetime import date
+    env = os.environ.get("DEAL_LOCATOR_EXPORT_DIR", "").strip()
+    root = Path(env).expanduser() if env else (Path.home() / "deal-locator-exports")
+    return root / date.today().isoformat()
+
+
+def _ym_parse(ym: str) -> Optional[tuple[int, int]]:
+    """'YYYYMM' → (년, 월). 형식·범위(2006~, 1~12월) 밖이면 None."""
+    if not _YM_RE.match(ym or ""):
+        return None
+    y, m = int(ym[:4]), int(ym[4:])
+    if not (2006 <= y <= 2100 and 1 <= m <= 12):
+        return None
+    return y, m
+
+
+def _deals_export_payload(year_month: str, year_month_to: str,
+                          gu: str, match: bool) -> dict[str, Any]:
+    d: dict[str, Any] = {
+        "status": "NOT_FOUND", "message": "", "path": "", "filename": "",
+        "rows": 0, "months": [], "gu_scope": gu or "서울전역", "per_gu": {},
+        "jiphap_excluded": 0, "cancelled_count": 0, "masked_count": 0,
+        "match": bool(match), "matched_count": None, "source": SOURCE_LINE,
+    }
+    if not _key_ok():
+        d.update(status="CONFIG_ERROR", message=KEY_MISSING_MSG)
+        return d
+
+    ym1 = _ym_parse(year_month)
+    if ym1 is None:
+        d.update(status="PARSE_ERROR",
+                 message=f"연월은 'YYYYMM'(2006년 이후) 형식이어야 한다: '{year_month}'")
+        return d
+    ym2 = ym1
+    if year_month_to:
+        ym2 = _ym_parse(year_month_to)
+        if ym2 is None:
+            d.update(status="PARSE_ERROR",
+                     message=f"연월은 'YYYYMM' 형식이어야 한다: '{year_month_to}'")
+            return d
+    span = (ym2[0] - ym1[0]) * 12 + (ym2[1] - ym1[1]) + 1
+    if span < 1:
+        d.update(status="PARSE_ERROR",
+                 message=f"범위가 역순이다: {year_month} → {year_month_to}")
+        return d
+    if span > _EXPORT_MAX_MONTHS:
+        d.update(status="PARSE_ERROR",
+                 message=(f"범위가 너무 넓다({span}개월) — 한 번에 최대 "
+                          f"{_EXPORT_MAX_MONTHS}개월까지. 나눠서 호출할 것."))
+        return d
+    if gu and gu not in SEOUL_GU_CODES:
+        d.update(status="PARSE_ERROR",
+                 message=f"'{gu}' 는 지원 범위 밖 — 서울 25개 구만 지원한다(v1).")
+        return d
+
+    months: list[str] = []
+    y, m = ym1
+    for _ in range(span):
+        months.append(f"{y}{m:02d}")
+        m += 1
+        if m > 12:
+            y, m = y + 1, 1
+    d["months"] = months
+    gus = [gu] if gu else list(SEOUL_GU_CODES)
+
+    import pandas as pd
+    from deal_locator.core.pipeline import filter_ilban
+
+    p = get_pipeline()
+    frames = []
+    with _quiet_stdout():
+        for g in gus:
+            for ym in months:
+                df = p.fetch_month_cached(ym, g)
+                if df is not None and not df.empty:
+                    frames.append(df)
+    if not frames:
+        d["message"] = (f"{d['gu_scope']} {months[0]}~{months[-1]} 상업업무용 "
+                        f"실거래가 없다(또는 아직 공개 전).")
+        return d
+
+    raw = pd.concat(frames, ignore_index=True)
+    with _quiet_stdout():
+        norm = p.normalize_columns(raw, source="api")
+    norm, jiphap = filter_ilban(norm)
+    norm = norm.reset_index(drop=True)
+    d["jiphap_excluded"] = int(jiphap)
+    if norm.empty:
+        d["message"] = (f"{d['gu_scope']} {months[0]}~{months[-1]} — 통건물(일반) "
+                        f"거래가 없다. 집합(구분상가) {jiphap}건은 취급 범위 밖이라 "
+                        f"제외했다(v1).")
+        return d
+
+    masked = norm["지번"].astype(str).str.contains(r"\*", regex=True, na=False)
+    d["masked_count"] = int(masked.sum())
+    cancel = norm["해제사유발생일"].fillna("").astype(str).str.strip()
+    d["cancelled_count"] = int(((cancel != "") & (cancel != "-")).sum())
+
+    if match:
+        # 역매칭은 동별 표제부 전체를 받는다 — 콜드 캐시면 수 분 이상 걸린다.
+        with _quiet_stdout():
+            norm = p.bulk_match(norm)
+        stage = norm["매칭단계"].astype(str).str.strip()
+        d["matched_count"] = int((stage != "")[masked].sum())
+
+    gu_series = norm["시군구"].astype(str).str.extract(r"(\S+구)", expand=False)
+    d["per_gu"] = {g: int(n) for g, n in gu_series.value_counts().items()}
+
+    span_txt = months[0] if len(months) == 1 else f"{months[0]}-{months[-1]}"
+    fname = (f"실거래_통건물_{_safe_stem(d['gu_scope'])}_{span_txt}"
+             f"{'_역매칭' if match else ''}.csv")
+    out_dir = _export_out_dir()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / fname
+    norm.to_csv(out_path, index=False, encoding="utf-8-sig")
+
+    d.update(status="OK", path=str(out_path), filename=fname, rows=int(len(norm)))
+    return d
+
+
+def _render_deals_export(d: dict[str, Any]) -> str:
+    if d["status"] in _ERR_PREFIX:
+        return f"{_ERR_PREFIX[d['status']]} {d['message']}"
+    if d["status"] == "NOT_FOUND":
+        return f"{NOT_FOUND} {d['message']} {NO_GUESS}"
+
+    span = d["months"][0] if len(d["months"]) == 1 else f"{d['months'][0]}~{d['months'][-1]}"
+    lines = [f"■ 실거래 CSV 내보내기 — {d['gu_scope']} {span} (통건물)",
+             f"  파일: {d['path']}",
+             f"  행수: {d['rows']:,}건 (해제신고 {d['cancelled_count']}건 포함·컬럼으로 구분)"]
+    if d["jiphap_excluded"]:
+        lines.append(f"  ※ 집합(구분상가) {d['jiphap_excluded']:,}건은 취급 범위 밖이라 제외(v1)")
+    if d["masked_count"]:
+        note = f"  ※ 지번 마스킹 {d['masked_count']:,}건"
+        if d["match"] and d["matched_count"] is not None:
+            note += f" — 역매칭으로 {d['matched_count']:,}건 복원(매칭단계 컬럼 참조)"
+        else:
+            note += " — 역매칭 없이 원본 그대로(match=true 로 복원 가능)"
+        lines.append(note)
+    top = sorted(d["per_gu"].items(), key=lambda kv: -kv[1])[:5]
+    if len(d["per_gu"]) > 1 and top:
+        lines.append("  구별 상위: " + " · ".join(f"{g} {n}건" for g, n in top))
+    lines.append(SOURCE_LINE)
+    return "\n".join(lines)
+
+
+@mcp.tool(title="실거래 CSV 내보내기", output_schema=DEALS_EXPORT_OUTPUT_SCHEMA,
+          annotations={**READ_ONLY_EXTERNAL, "readOnlyHint": False})
+def deals_export(
+    year_month: str,
+    year_month_to: str = "",
+    gu: str = "",
+    match: bool = False,
+) -> ToolResult:
+    """연월(YYYYMM)을 지정해 서울 전역(또는 한 구)의 상업업무용 통건물 실거래를
+    CSV 파일로 내려받는다.
+
+    year_month 하나면 그 달, year_month_to 까지 주면 범위(최대 24개월)다.
+    gu 를 주면 그 구만(예: '강남구'), 비우면 서울 25개 구 전체를 내보낸다.
+    집합(구분상가)은 취급 범위 밖이라 제외되며 건수만 보고한다(v1).
+    해제신고 거래는 행으로 남긴다 — '해제사유발생일' 컬럼으로 구분할 것.
+
+    match=true 면 마스킹 지번을 표제부 역매칭으로 복원해 '대지위치_표제부'·
+    '매칭단계' 컬럼을 채운다. **콜드 캐시면 동별 표제부 수신에 수 분~수십 분**
+    걸리니, 사용자가 지번 복원까지 원할 때만 켤 것. 기본(false)은 국토부 원본
+    그대로라 서울 전역 1개월이 수십 초 안에 끝난다.
+
+    저장 위치는 ~/deal-locator-exports/<날짜>/ (DEAL_LOCATOR_EXPORT_DIR 로 변경
+    가능), 인코딩은 utf-8-sig(엑셀 호환)다. 같은 인자로 다시 부르면 같은 파일을
+    덮어쓴다(멱등).
+    """
+    data = _deals_export_payload(year_month, year_month_to, gu, match)
+    return ToolResult(content=_render_deals_export(data), structured_content=data,
+                      is_error=data["status"] in _IS_ERROR_STATUSES)
+
+
 def _env_candidates() -> list[Path]:
     """.env 탐색 경로 — 우선순위 순, 중복 제거.
 
@@ -1798,6 +2018,7 @@ _ENV_ALLOWLIST = frozenset({
     "DATA_GO_KR_API_KEY",
     "DEAL_LOCATOR_CACHE_DIR",
     "DEAL_LOCATOR_CARD_DIR",
+    "DEAL_LOCATOR_EXPORT_DIR",
 })
 
 
