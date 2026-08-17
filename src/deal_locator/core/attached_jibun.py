@@ -79,6 +79,8 @@ def fetch_attached_jibun(
                 "bjdongCd": bdong_code,
                 "numOfRows": "100",
                 "pageNo": str(page),
+                # 건축HUB 기본 응답이 JSON 으로 바뀜(2026-08) — XML 명시 필수
+                "_type": "xml",
             }
             # HTTP 5xx·429 는 data.go.kr 일시 장애 — 지수 백오프로 재시도한다.
             # 여기서 즉시 None 을 반환하면 그 동의 부속지번 인덱스가 통째로 비어
@@ -97,11 +99,15 @@ def fetch_attached_jibun(
                 return pairs if pairs else None
 
             try:
-                data = xmltodict.parse(
-                    resp.text, disable_entities=True, process_namespaces=False
-                )
+                # _type=xml 을 무시하고 JSON 이 오는 경우까지 겸용 파싱
+                if resp.text.lstrip().startswith("{"):
+                    data = {"response": json.loads(resp.text)}
+                else:
+                    data = xmltodict.parse(
+                        resp.text, disable_entities=True, process_namespaces=False
+                    )
             except Exception:  # noqa: BLE001
-                logger.warning("부속지번 API XML 파싱 실패")
+                logger.warning("부속지번 API 응답 파싱 실패")
                 return None
 
             header = data.get("response", {}).get("header", {})
