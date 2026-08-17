@@ -9,7 +9,7 @@
       "name": "deal-locator",
       "source": "./",
       "description": "국토부 실거래가 × 건축물대장 역매칭 — 구·동 시세, 지번 실거래, 매칭 근거, 데이터카드",
-      "version": "1.0.0",
+      "version": "1.3.0",
       "author": {
         "name": "디랩스 (DLABS)"
       }
