@@ -1362,10 +1362,13 @@ class RealEstateDataPipeline:
                     break
 
                 try:
-                    # _type=xml 을 무시하고 JSON 이 오는 경우까지 겸용 파싱
+                    # _type=xml 을 무시하고 JSON 이 오는 경우까지 겸용 파싱.
+                    # 실측 JSON 은 top-level 이 {header, body} 라 response 로
+                    # 감싸지만, response 래퍼가 이미 있는 형태도 수용한다.
                     if resp.text.lstrip().startswith("{"):
                         import json as _json
-                        data = {"response": _json.loads(resp.text)}
+                        payload = _json.loads(resp.text)
+                        data = payload if "response" in payload else {"response": payload}
                     else:
                         data = xmltodict.parse(
                             resp.text, disable_entities=True, process_namespaces=False
