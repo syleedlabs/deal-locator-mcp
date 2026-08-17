@@ -545,9 +545,15 @@ class RealEstateDataPipeline:
             # NO 컬럼 (순번)
             result["NO"] = range(1, len(df) + 1)
 
-            # 도로조건, 지분구분 (API에 없음)
+            # 도로조건 (API에 없음)
             result["도로조건"] = ""
-            result["지분구분"] = ""
+            # 지분구분: API 의 shareDealingType('지분') — 지분거래는 거래면적이
+            # 건물 전체가 아니라 지분 몫이라 절대값 스펙매칭이 원리상 불가,
+            # 비율매칭(P6)으로 분기하기 위해 보존한다.
+            if "shareDealingType" in df.columns:
+                result["지분구분"] = df["shareDealingType"].fillna("").astype(str).values
+            else:
+                result["지분구분"] = ""
 
         elif source == "manual":
             # 수동 CSV는 이미 기존 포맷일 가능성이 높음
@@ -673,6 +679,7 @@ class RealEstateDataPipeline:
             match_result = self.match_single(
                 df_pyoje, building_area, land_area, build_year,
                 masked_jibun=jibun, reason_out=reasons,
+                share_deal=str(row.get("지분구분", "")).strip() == "지분",
             )
             if match_result:
                 df.at[idx, "대지위치_표제부"] = match_result["address"]
@@ -703,6 +710,7 @@ class RealEstateDataPipeline:
                 match_result = self.match_single(
                     df_pyoje_csv, building_area, land_area, build_year,
                     masked_jibun=str(row.get("지번", "")),
+                    share_deal=str(row.get("지분구분", "")).strip() == "지분",
                 )
                 if match_result:
                     df.at[idx, "대지위치_표제부"] = match_result["address"]
@@ -815,14 +823,18 @@ class RealEstateDataPipeline:
         build_year: float,
         masked_jibun: str = "",
         reason_out: Optional[list[str]] = None,
+        share_deal: bool = False,
     ) -> Optional[dict[str, str]]:
         """단일 거래 건에 대해 3단계 표제부 매칭을 수행합니다.
 
         masked_jibun: 거래 행의 마스킹 지번('3**'). _필지세트 주석이 있으면
         접두 호환 필지세트를 가진 표제부 행만 후보로 남겨 오매칭을 줄인다.
+        share_deal: 지분거래 여부(지분구분=='지분'). 지분거래는 거래 연면적·
+            대지면적이 건물 전체가 아닌 지분 몫이라 절대값 매칭이 원리상
+            불가 → P6 비율매칭(연면적지분율≈대지지분율·유일후보)으로 복원.
         reason_out: 계측용 out-param(선택). None 을 반환할 때 그 사유코드를
             append 한다 — 매칭 결과 자체는 불변(비침습). 사유코드:
-            프리필터_탈락 / 건축년도_불일치 / 스펙_오차밖.
+            프리필터_탈락 / 건축년도_불일치 / 스펙_오차밖 / 지분_비율불일치.
         """
         tol = self._match_tolerance
 
@@ -837,6 +849,53 @@ class RealEstateDataPipeline:
                     reason_out.append("프리필터_탈락")
                 return None
 
+        # P6: 지분거래 — 거래 면적이 건물 전체가 아닌 지분 몫이므로 절대값
+        # 단계(1~3)는 원리상 무의미하고 오매칭 위험만 있다(작은 건물의 전체
+        # 스펙과 우연 일치). 연면적지분율≈대지지분율(비율 일관성) & 유일후보
+        # 일 때만 복원하고, 아니면 포기한다.
+        if share_deal:
+            # 후보 풀 2단: 년도 정확일치 → (실패 시) 년도±1. 사용승인 연도와
+            # 신고 건축년도가 1년 어긋나는 사례가 흔해, 비율+유일성 가드 하에
+            # ±1년까지 허용한다. 년도 결측이면 전체 풀.
+            if pd.isna(build_year):
+                pools = [df_pyoje]
+            else:
+                exact_pool = df_pyoje[df_pyoje["건축년도_매칭"] == build_year]
+                near_pool = df_pyoje[
+                    (df_pyoje["건축년도_매칭"] - build_year).abs() <= 1
+                ]
+                pools = [exact_pool, near_pool]
+            if (not pd.isna(land_area) and land_area > 0
+                    and not pd.isna(building_area) and building_area > 0):
+                for cand in pools:
+                    c = cand[(cand["연면적_float"] > 0)
+                             & (cand["대지면적_float"].fillna(0) > 0)]
+                    if c.empty:
+                        continue
+                    share_a = building_area / c["연면적_float"]
+                    share_l = land_area / c["대지면적_float"]
+                    dev = (share_a / share_l - 1).abs()
+                    valid = (share_a <= 1.001) & (share_l <= 1.001)
+                    # 2단 허용오차: 진짜 건물은 등기 지분율이 연면적·대지면적에
+                    # 동일하게 적용돼 편차가 ~0.1% 이내로 뚜렷이 분리된다(실측).
+                    # 0.2% 이내 유일후보 우선, 없으면 2% 이내 유일후보 폴백.
+                    ambiguous = False
+                    for tol_ratio in (0.002, 0.02):
+                        consistent = c[valid & (dev <= tol_ratio)]
+                        if len(consistent) == 1:
+                            return self._extract_match(
+                                consistent.iloc[0],
+                                "추정매칭: 지분 비율일치 (유일후보)",
+                            )
+                        if len(consistent) > 1:
+                            ambiguous = True
+                            break  # 타이트 구간에서 이미 복수 → 느슨하면 무의미
+                    if ambiguous:
+                        break  # 정확년도 풀에서 복수면 ±1 확장은 더 위험
+            if reason_out is not None:
+                reason_out.append("지분_비율불일치")
+            return None
+
         # P3: 건축년도 결측 — 연면적+대지면적 동시 정확일치 & 후보 유일일 때만
         # 추정매칭 복원(유일성 가드). 2개 이상이면 임의선택 금지 → 포기.
         if pd.isna(build_year):
@@ -850,6 +909,25 @@ class RealEstateDataPipeline:
                         p3.iloc[0],
                         "추정매칭: 연면적+대지 정확 (건축년도 결측·유일후보)",
                     )
+            # P3b: 대지면적까지 정확일치하는 후보가 없으면(가각전제·합필로
+            # 대지가 어긋나는 경우) 연면적 단독 정확일치 & 유일후보로 복원.
+            # 접두 프리필터(Stage 0)를 통과한 풀 안에서의 유일성이라 보수적.
+            p3b = df_pyoje[
+                (df_pyoje["연면적_float"] - building_area).abs()
+                <= max(building_area * 0.001, 0.011)
+            ]
+            if len(p3b) == 1:
+                return self._extract_match(
+                    p3b.iloc[0],
+                    "추정매칭: 연면적 정확 (건축년도 결측·유일후보)",
+                )
+            # P3c: 미신고 지분거래 회복 — 연/대 비율 일관(0.2%)·유일후보.
+            # 지분율 1.0(전체 매매)도 자연 포함되므로 일반형으로 안전.
+            p3c = self._ratio_unique(df_pyoje, building_area, land_area)
+            if p3c is not None:
+                return self._extract_match(
+                    p3c, "추정매칭: 비율일치 (건축년도 결측·유일후보)"
+                )
             if reason_out is not None:
                 reason_out.append("건축년도_결측")
             return None
@@ -926,6 +1004,27 @@ class RealEstateDataPipeline:
                     f"추정매칭: 연면적±{tol*100:.0f}%·대지완화 (유일후보)",
                 )
 
+        # P8: 건축년도 ±1 + 연면적 정확 + 유일후보 — 사용승인 연도와 신고
+        # 건축년도가 1년 어긋나는 사례(연말 준공·이월 등기) 회복. 연면적
+        # 정확일치가 유일하면 년도 1년 차이는 신고 노이즈로 본다.
+        p8 = df_pyoje[
+            ((df_pyoje["건축년도_매칭"] - build_year).abs() <= 1)
+            & ((df_pyoje["연면적_float"] - building_area).abs()
+               <= max(building_area * 0.001, 0.011))
+        ]
+        if len(p8) == 1:
+            return self._extract_match(
+                p8.iloc[0], "추정매칭: 연면적 정확·건축년도±1 (유일후보)"
+            )
+
+        # P7: 최후단 비율일치 — 지분구분 미신고 지분거래(실측: 플래그 누락 빈발)
+        # 는 절대값 단계가 전부 빗나간다. 건축년도 일치 풀에서 연/대 비율
+        # 일관(0.2%)·유일후보일 때만 복원(지분율 1.0 = 전체 매매도 포함).
+        year_pool = df_pyoje[df_pyoje["건축년도_매칭"] == build_year]
+        p7 = self._ratio_unique(year_pool, building_area, land_area)
+        if p7 is not None:
+            return self._extract_match(p7, "추정매칭: 비율일치 (유일후보)")
+
         if reason_out is not None:
             # 후보 풀에 '건축년도 일치' 표제부가 아예 없었으면 년도 게이트에서 전멸,
             # 있었는데도 여기까지 왔으면 연면적/대지 오차범위 밖.
@@ -945,6 +1044,31 @@ class RealEstateDataPipeline:
         return self.match_single(
             df_pyoje, building_area, land_area, build_year, masked_jibun=masked_jibun
         )
+
+    @staticmethod
+    def _ratio_unique(
+        cand: pd.DataFrame, building_area: float, land_area: float,
+        tol_ratio: float = 0.002,
+    ) -> Optional[pd.Series]:
+        """연/대 비율 일관(등기 지분율이 두 면적에 동일 적용) & 유일후보 검사.
+
+        거래 연면적/후보 연면적 = 거래 대지면적/후보 대지면적 이 tol_ratio
+        이내로 일치하고 지분율 ≤ 1 인 후보가 정확히 1개면 그 행을 반환.
+        지분율 1.0 이면 전체 매매와도 정합하므로 일반형으로 안전하다.
+        """
+        if (pd.isna(land_area) or land_area <= 0
+                or pd.isna(building_area) or building_area <= 0 or cand.empty):
+            return None
+        c = cand[(cand["연면적_float"] > 0) & (cand["대지면적_float"].fillna(0) > 0)]
+        if c.empty:
+            return None
+        share_a = building_area / c["연면적_float"]
+        share_l = land_area / c["대지면적_float"]
+        dev = (share_a / share_l - 1).abs()
+        consistent = c[(share_a <= 1.001) & (share_l <= 1.001) & (dev <= tol_ratio)]
+        if len(consistent) == 1:
+            return consistent.iloc[0]
+        return None
 
     @staticmethod
     def _extract_match(row: pd.Series, stage: str) -> dict[str, str]:
@@ -1188,7 +1312,8 @@ class RealEstateDataPipeline:
             page = 1
             # 큰 동(구로동 표제부 4천+건)은 20페이지(2000건)로는 잘려서
             # 뒤쪽 지번의 앵커 조회가 조용히 실패한다 → 상한 확대 + 절단 경고.
-            max_pages = 100  # 최대 100페이지 (10,000건)
+            # 화곡동 13,064건(2026-08 실측)이 100페이지(1만건)도 초과 → 200.
+            max_pages = 200  # 최대 200페이지 (20,000건)
             total_count = 0
             fetch_complete = True  # 오류로 중단되면 False — 부분수신본 캐시 방지
 
@@ -1199,6 +1324,9 @@ class RealEstateDataPipeline:
                     "bjdongCd": bdong_code,
                     "numOfRows": "100",
                     "pageNo": str(page),
+                    # 건축HUB 가 기본 응답을 JSON 으로 바꿨다(2026-08 확인) —
+                    # XML 을 명시하지 않으면 xmltodict 파싱이 전면 실패한다.
+                    "_type": "xml",
                 }
                 # 페이지 단위 재시도 — 큰 동은 80페이지+ 라 중간 타임아웃/5xx 1회로
                 # 전체를 버리면 앵커가 전멸한다. HTTP 5xx·429 는 data.go.kr 의
@@ -1234,11 +1362,19 @@ class RealEstateDataPipeline:
                     break
 
                 try:
-                    data = xmltodict.parse(
-                        resp.text, disable_entities=True, process_namespaces=False
-                    )
+                    # _type=xml 을 무시하고 JSON 이 오는 경우까지 겸용 파싱.
+                    # 실측 JSON 은 top-level 이 {header, body} 라 response 로
+                    # 감싸지만, response 래퍼가 이미 있는 형태도 수용한다.
+                    if resp.text.lstrip().startswith("{"):
+                        import json as _json
+                        payload = _json.loads(resp.text)
+                        data = payload if "response" in payload else {"response": payload}
+                    else:
+                        data = xmltodict.parse(
+                            resp.text, disable_entities=True, process_namespaces=False
+                        )
                 except Exception:
-                    logger.warning(f"표제부 API XML 파싱 실패: {gu_name} {dong_name}")
+                    logger.warning(f"표제부 API 응답 파싱 실패: {gu_name} {dong_name}")
                     fetch_complete = False
                     break
 
@@ -1288,7 +1424,11 @@ class RealEstateDataPipeline:
             )
             result["연면적_float"] = result["연면적(㎡)"]
             result["대지면적_float"] = result["대지면적(㎡)"]
-            result = result.dropna(subset=["건축년도_매칭", "연면적_float"])
+            # 사용승인일 결측 행도 보존한다(연면적만 필수). 무허가·미등재 노후
+            # 건물이 여기 속하는데, 이를 버리면 건축년도 결측 거래(전수의 ~15%)
+            # 의 매칭 상대가 풀에서 사라진다. 년도 필터 단계는 NaN 비교가
+            # False 라 자연 배제되므로 안전하다.
+            result = result.dropna(subset=["연면적_float"])
 
             logger.info(
                 f"표제부 API 조회: {gu_name} {dong_name} - {len(result)}건 "

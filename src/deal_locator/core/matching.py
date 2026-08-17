@@ -63,21 +63,32 @@ def jibun_equal(a: str, b: str) -> bool:
 def masked_prefix_ok(masked: str, bunji: str) -> bool:
     """마스킹 지번('3**')이 타깃 본번('321')과 접두 호환인지.
 
-    국토부 마스킹은 본번 첫 자리만 남기고 '*' 처리하는 경향이 있다.
-    잘못된 접두면 빠르게 제외(false positive 감소)하되,
-    포맷이 불확실하면 통과시켜 속성 매칭에 맡긴다.
+    국토부 마스킹 규칙(실측): 본번 첫 자리만 남기고 나머지 자릿수만큼 '*',
+    부번은 통째로 생략 — '183-13' → '1**'. 따라서 '2**'는 '본번이 정확히
+    3자리이고 2로 시작'을 뜻한다. 자릿수까지 검사해야 '2**' 후보에 '22-6'
+    같은 2자리 본번이 섞이는 것을 막는다(후보 풀 축소 → 유일후보 가드 향상).
+    표준형이 아닌 마스킹(별 아닌 자리, 부번 포함 등)은 자릿수 확정이 불가
+    하므로 기존의 느슨한 접두 검사로 폴백한다.
     """
     if not masked or "*" not in masked:
         return True
     # 시리즈 실거래 지번은 '서울특별시 구로구 구로동 1***'처럼 주소 전체가
     # 붙어 오기도 한다 → 마지막 토큰(마스킹 번지)만 취해 검사.
     masked = masked.strip().split()[-1]
-    head = re.match(r"\d+", masked)
     bun_head = re.match(r"\d+", str(bunji))
-    if not head or not bun_head:
+    if not bun_head:
+        return True
+    # 표준형 '숫자+별들' — 본번 자릿수와 첫 접두 모두 일치해야 통과
+    std = re.match(r"^(\d+)(\*+)$", masked)
+    if std:
+        bun = bun_head.group(0)
+        return len(bun) == len(masked) and bun.startswith(std.group(1))
+    # 비표준형 폴백: 느슨한 접두 검사
+    head = re.match(r"\d+", masked)
+    if not head:
         return True
     h = head.group(0)
-    return str(bunji).startswith(h[: len(h)]) or bun_head.group(0).startswith(h)
+    return str(bunji).startswith(h) or bun_head.group(0).startswith(h)
 
 
 def masked_prefix_ok_any(masked: str, lots: Iterable[str]) -> bool:
