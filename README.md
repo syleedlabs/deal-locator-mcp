@@ -8,17 +8,24 @@
 > "어느 건물인지 모른다"에서 멈출 때, deal-locator는 건축물대장 표제부로 **역매칭해 그
 > 건물을 되짚고**, 그 위에 시세 · 이력 · 콘텐츠를 얹은 올인원 도구입니다.
 
-![Version](https://img.shields.io/badge/version-1.3.0-f59e0b)
+![Version](https://img.shields.io/badge/version-1.4.0-f59e0b)
 ![Author](https://img.shields.io/badge/author-DLABS-1f2937)
 ![Tools](https://img.shields.io/badge/MCP_도구-7종-2563eb)
 ![Data](https://img.shields.io/badge/데이터-국토부_·_건축HUB-0ea5e9)
 ![Platform](https://img.shields.io/badge/platform-Claude_Desktop_·_Claude_Code-7c3aed)
 ![License](https://img.shields.io/badge/license-MIT-16a34a)
 
-> **🆕 v1.3 (2026-08)** — ① 매칭 엔진 v2: 지분거래 비율매칭·자릿수 프리필터 등으로
-> 마스킹 지번 복원율 **84%**(서울 25개 구 전수, 오매칭 0) ② 새 도구
+> **🆕 v1.4 (2026-08)** — **카드 신뢰도 게이트**: `deal_card_create` 가 추정매칭
+> 이하(신뢰도 0.90 미만)는 `LOW_CONFIDENCE` 로 멈춥니다. 카드 PNG 는 대화를 떠나
+> 고객 손에 가는데, 추정매칭은 *동일 스펙 옆 건물일 수 있는* 상태이기 때문입니다.
+> 근거(`match_explain`) 확인 후 `allow_estimated=true` 로만 발행되며, 발행된 카드에는
+> 신뢰도 배지가 그대로 찍힙니다.
+>
+> **v1.3** — ① 매칭 엔진 v2: 지분거래 비율매칭·자릿수 프리필터 등으로 마스킹 지번
+> 복원율 **84%**(서울 25개 구 전수, 오매칭 0) ② 새 도구
 > [`deals_export`](#7-deals_export--실거래-csv-내보내기): 연월 지정 서울 전역 실거래를
-> **지번 복원된 CSV**로 다운로드 ③ 건축HUB API 응답 형식 변경(2026-08) 대응.
+> **지번 복원된 CSV**로 다운로드(2006~, 장기간은 연도별 파일) ③ 건축HUB API 응답
+> 형식 변경 대응.
 
 ---
 

@@ -217,6 +217,28 @@ def test_정확매칭은_플래그_없이_통과한다(spy: dict[str, Any]) -> N
     assert spy["calls"] == 1
 
 
+def test_stage2_0_90_은_경계에서_통과한다(monkeypatch, spy: dict[str, Any]) -> None:
+    """경계값 고정 — README 대표 예시(영등포동8가 34-20)가 바로 이 0.90 이다.
+    '<' 이 '<=' 로 바뀌거나 임계가 0.91 이 되면 stage2 정확매칭이 전부 막히는데,
+    이 테스트가 없으면 그 회귀가 조용히 통과한다."""
+    _low_conf(monkeypatch, score=0.90, label="정확매칭")
+    d = _call(allow_no_photo=True)
+    assert d["status"] == "OK"
+    assert spy["calls"] == 1
+
+
+def test_신뢰도_미상이면_막는다(monkeypatch, spy: dict[str, Any]) -> None:
+    """fail-closed: 배지는 라벨이 비면 렌더에서 생략되므로, 미상을 통과시키면
+    게이트도 배지도 없는 카드가 나간다 — 두 겹 방어가 한꺼번에 무너진다."""
+    t = _tx(confidence="", confidence_score=None, match_stage="", caveat="")
+    monkeypatch.setattr(S, "_cached_lookup",
+                        lambda address, months: _res(transactions=[t], latest=t))
+    d = _call(allow_no_photo=True)
+    assert d["status"] == "LOW_CONFIDENCE"
+    assert spy.get("calls") is None
+    assert "미상" in d["message"]
+
+
 def test_신뢰도_게이트는_사진게이트보다_먼저_걸린다(monkeypatch, spy) -> None:
     """사진도 없고 신뢰도도 낮으면 — 더 치명적인 쪽(지번 미확정)을 먼저 알린다.
     사진을 구해 온 뒤에야 '사실 지번이 미확정'을 듣게 되면 헛수고가 된다."""
@@ -226,10 +248,13 @@ def test_신뢰도_게이트는_사진게이트보다_먼저_걸린다(monkeypat
     assert spy.get("calls") is None
 
 
-def test_LOW_CONFIDENCE_는_에러가_아니다() -> None:
+def test_LOW_CONFIDENCE_는_에러가_아니다(monkeypatch, spy) -> None:
     """isError 로 나가면 LLM 이 자동 재시도하거나 '오류'로 전달한다 —
     추정매칭 발행 여부는 사람이 정할 일이므로 실패가 아니다."""
     assert "LOW_CONFIDENCE" not in S._IS_ERROR_STATUSES
+    _low_conf(monkeypatch)
+    assert S._render_deal_card_create(_call(allow_no_photo=True)).startswith(
+        "[LOW_CONFIDENCE]")
 
 
 def test_툴_호출은_LOW_CONFIDENCE_를_에러로_내보내지_않는다(monkeypatch, spy) -> None:

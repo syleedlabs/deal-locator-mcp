@@ -1639,20 +1639,24 @@ def _deal_card_create_payload(address: str, months: int, photo: str,
     # ── 신뢰도 게이트 ────────────────────────────────────────────────
     # 사진 게이트보다 **먼저** 건다: 사진을 구해 온 뒤에야 "사실 지번이 미확정"을
     # 듣게 되면 헛수고가 된다. 더 치명적인 쪽(지번 미확정)을 먼저 알린다.
+    # 신뢰도 미상(score=None)도 **막는다**(fail-closed). 배지는 라벨이 비면 렌더에서
+    # 생략되므로(render/card.html `{% if conf_text %}`), 미상을 통과시키면 게이트도
+    # 배지도 없는 카드가 나가 이 설계의 두 겹이 한꺼번에 무너진다.
     score = t.get("confidence_score")
-    if (not allow_estimated and score is not None
-            and score < _CARD_CONFIDENCE_MIN):
+    if not allow_estimated and (score is None or score < _CARD_CONFIDENCE_MIN):
         caveat = t.get("caveat") or ""
+        shown = f"{score:.2f}" if score is not None else "미상"
+        label = t.get("confidence") or "미상"
         d.update(status="LOW_CONFIDENCE",
-                 message=(f"{head} — 매칭 신뢰도가 낮아('{t.get('confidence','')}' "
-                          f"{score:.2f}) 카드를 만들지 않았다.\n"
-                          f"{caveat}\n"
-                          f"카드 PNG 는 대화를 떠나 고객 손에 가므로, 지번이 확정되지 "
-                          f"않은 건은 옆 건물 실거래가가 이 건물 값으로 박힌 이미지가 "
-                          f"돌 수 있다.\n"
-                          f"match_explain 으로 매칭 근거를 확인한 뒤, 그래도 발행하려면 "
-                          f"allow_estimated=true 로 재호출할 것 "
-                          f"(카드에는 신뢰도 배지가 함께 찍힌다)."))
+                 message=(f"{head} — 매칭 신뢰도가 낮아('{label}' {shown}) "
+                          f"카드를 만들지 않았다.\n"
+                          + (f"{caveat}\n" if caveat else "")
+                          + "카드 PNG 는 대화를 떠나 고객 손에 가므로, 지번이 확정되지 "
+                            "않은 건은 옆 건물 실거래가가 이 건물 값으로 박힌 이미지가 "
+                            "돌 수 있다.\n"
+                            "match_explain 으로 매칭 근거를 확인한 뒤, 그래도 발행하려면 "
+                            "allow_estimated=true 로 재호출할 것 "
+                            "(카드에는 신뢰도 배지가 함께 찍힌다)."))
         return d
 
     # ── 사진 게이트 ──────────────────────────────────────────────────
