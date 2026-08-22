@@ -236,6 +236,19 @@ def test_파일명에_스코프와_연월이_들어간다(fake_pipe) -> None:
     assert "서울전역" in d2["filename"] and "202607" in d2["filename"]
 
 
+def test_한해_1월부터_12월이면_파일명은_연도로_떨어진다(fake_pipe) -> None:
+    # 연 단위 백필 오케스트레이션이 …_2016_ 로 깔끔히 정렬되게 하는 규칙
+    d = _call(gu="강남구", year_month="201601", year_month_to="201612")
+    assert "강남구_2016_" in d["filename"], d["filename"]
+    assert "201601-201612" not in d["filename"]
+
+
+def test_부분연도_범위는_연월범위_그대로_표기한다(fake_pipe) -> None:
+    # 현재 해 부분(1~8월)이나 2006 시작 부분월은 연도 축약하지 않는다(정직한 표기)
+    d = _call(gu="강남구", year_month="202601", year_month_to="202608")
+    assert "202601-202608" in d["filename"], d["filename"]
+
+
 def test_재실행은_같은_경로를_덮어쓴다(fake_pipe) -> None:
     d1 = _call(gu="강남구")
     d2 = _call(gu="강남구")

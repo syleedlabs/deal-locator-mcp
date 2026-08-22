@@ -1928,7 +1928,15 @@ def _deals_export_payload(year_month: str, year_month_to: str,
     gu_series = norm["시군구"].astype(str).str.extract(r"(\S+구)", expand=False)
     d["per_gu"] = {g: int(n) for g, n in gu_series.value_counts().items()}
 
-    span_txt = months[0] if len(months) == 1 else f"{months[0]}-{months[-1]}"
+    # 파일명 기간 표기: 단월='YYYYMM', 한 해 1~12월 전체='YYYY'(연 파티션 정렬),
+    # 그 외 범위='YYYYMM-YYYYMM'. 연 단위 백필이 …_2016_ 로 깔끔히 떨어진다.
+    if len(months) == 1:
+        span_txt = months[0]
+    elif (len(months) == 12 and months[0].endswith("01")
+          and months[-1].endswith("12") and months[0][:4] == months[-1][:4]):
+        span_txt = months[0][:4]
+    else:
+        span_txt = f"{months[0]}-{months[-1]}"
     base = f"실거래_통건물_{_safe_stem(d['gu_scope'])}_{span_txt}"
     out_dir = _export_out_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
