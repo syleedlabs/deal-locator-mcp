@@ -88,6 +88,9 @@ mcp = FastMCP(
         "area_scan 은 coverage(모수 분해)를 함께 확인해 표본 대표성을 판단할 것. "
         "쓰기 도구는 2종뿐이다 — deal_card_create(카드 PNG)와 deals_export"
         "(연월 지정 실거래 CSV 다운로드, 파일 생성 외 부작용 없음). "
+        "deal_card_create 의 PHOTO_MISSING·LOW_CONFIDENCE 는 실패가 아니라 사람이 "
+        "결정할 상태다 — 재시도하지 말고 사용자에게 그대로 전하고, 추정매칭 발행은 "
+        "match_explain 으로 근거를 확인시킨 뒤 allow_estimated=true 로 진행할 것. "
         "이 도구의 결과는 참고자료이지 중개대상물 확인·설명서가 아니다 — "
         "사용자가 고객에게 제시할 목적이면 원문(실거래가 공개시스템·건축물대장)을 "
         "직접 확인하도록 안내할 것."
@@ -1473,20 +1476,32 @@ def area_scan(
 # 조회 결과를 그대로 이미지로 옮긴다. 창작 문구가 없으므로 카드의 모든 글자가
 # 실측값이거나 고정 라벨이며, LLM 이 지어낼 자리가 없다.
 #
-# 신뢰도를 **차단**이 아니라 **표기**로 다룬다: 카드가 손을 떠나면 대화로 고지할
-# 방법이 없으므로, 신뢰도를 카드 안에 배지로 박아 근거가 늘 따라다니게 했다.
+# 신뢰도는 **차단 + 표기** 둘 다로 다룬다.
+#   차단 — 카드 PNG 는 대화를 떠나 고객 손에 가는, 이 도구 유일의 '맥락 없이
+#     유통되는 산출물'이다. '추정매칭'은 정의상 동일 스펙 옆 건물일 수 있는
+#     상태라, 옆 건물 실거래가가 이 건물 값으로 박힌 이미지가 돌 수 있다.
+#     그래서 사진 게이트와 같은 관용구로 기본 차단하고, 맥락을 아는 사람이
+#     allow_estimated=true 로 의식적으로 통과시키게 한다.
+#   표기 — 통과한 카드에는 신뢰도 배지를 계속 박는다. 이미지가 손을 떠난 뒤에는
+#     대화로 고지할 방법이 없으므로 근거가 늘 따라다녀야 한다.
+# 배지만으로는 '받는 사람이 배지를 읽는다'에 기대게 된다 — 그래서 보내는 사람의
+# 결정을 한 번 요구하는 게이트를 앞에 둔다(2026-08-22 이슈 반영).
+_CARD_CONFIDENCE_MIN = 0.90  # matching.CONFIDENCE: 정확매칭 0.90/0.97 통과, 추정 0.60·인접 0.50 차단
 
 DEAL_CARD_CREATE_OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
         "status": {
             "type": "string",
-            "enum": ["OK", "NOT_FOUND", "PHOTO_MISSING", "RENDER_ERROR",
-                     "PARSE_ERROR", "CONFIG_ERROR", "EXTERNAL_API_ERROR"],
+            "enum": ["OK", "NOT_FOUND", "PHOTO_MISSING", "LOW_CONFIDENCE",
+                     "RENDER_ERROR", "PARSE_ERROR", "CONFIG_ERROR",
+                     "EXTERNAL_API_ERROR"],
             "description": (
                 "OK 일 때만 out_png 에 카드가 생성됐다. "
-                "PHOTO_MISSING 은 실패가 아니라 '사람이 결정할 게 남은' 상태 — "
-                "사진 경로를 주거나 allow_no_photo=true 로 재호출하면 진행된다."
+                "PHOTO_MISSING·LOW_CONFIDENCE 는 실패가 아니라 '사람이 결정할 게 "
+                "남은' 상태다 — 전자는 사진 경로를 주거나 allow_no_photo=true, "
+                "후자는 근거(match_explain) 확인 후 allow_estimated=true 로 "
+                "재호출하면 진행된다. 재시도로 뚫리지 않으니 사용자에게 그대로 전할 것."
             ),
         },
         "message": {"type": "string"},
@@ -1600,7 +1615,8 @@ def _card_rows(t: dict[str, Any], b: Optional[dict[str, Any]], head: str) -> lis
 
 
 def _deal_card_create_payload(address: str, months: int, photo: str,
-                              eyebrow: str, allow_no_photo: bool) -> dict[str, Any]:
+                              eyebrow: str, allow_no_photo: bool,
+                              allow_estimated: bool = False) -> dict[str, Any]:
     d: dict[str, Any] = {
         "status": "NOT_FOUND", "message": "", "query": address, "address": {},
         "out_png": "", "photo": "", "eyebrow": "", "price": "", "rows": [],
@@ -1617,6 +1633,27 @@ def _deal_card_create_payload(address: str, months: int, photo: str,
     b = card.get("building") or {}
     a = card["address"] or {}
     head = f"{a.get('gu','')} {a.get('dong','')} {a.get('bunji','')}".strip()
+    d["confidence"] = t.get("confidence", "")
+    d["confidence_score"] = t.get("confidence_score")
+
+    # ── 신뢰도 게이트 ────────────────────────────────────────────────
+    # 사진 게이트보다 **먼저** 건다: 사진을 구해 온 뒤에야 "사실 지번이 미확정"을
+    # 듣게 되면 헛수고가 된다. 더 치명적인 쪽(지번 미확정)을 먼저 알린다.
+    score = t.get("confidence_score")
+    if (not allow_estimated and score is not None
+            and score < _CARD_CONFIDENCE_MIN):
+        caveat = t.get("caveat") or ""
+        d.update(status="LOW_CONFIDENCE",
+                 message=(f"{head} — 매칭 신뢰도가 낮아('{t.get('confidence','')}' "
+                          f"{score:.2f}) 카드를 만들지 않았다.\n"
+                          f"{caveat}\n"
+                          f"카드 PNG 는 대화를 떠나 고객 손에 가므로, 지번이 확정되지 "
+                          f"않은 건은 옆 건물 실거래가가 이 건물 값으로 박힌 이미지가 "
+                          f"돌 수 있다.\n"
+                          f"match_explain 으로 매칭 근거를 확인한 뒤, 그래도 발행하려면 "
+                          f"allow_estimated=true 로 재호출할 것 "
+                          f"(카드에는 신뢰도 배지가 함께 찍힌다)."))
+        return d
 
     # ── 사진 게이트 ──────────────────────────────────────────────────
     # 사진 없는 카드는 결국 다시 만들게 된다. 렌더(수 초 + 브라우저 기동)를
@@ -1702,6 +1739,8 @@ def _render_deal_card_create(d: dict[str, Any]) -> str:
         return f"{NOT_FOUND} {d['message']} {NO_GUESS}"
     if d["status"] == "PHOTO_MISSING":
         return f"[PHOTO_MISSING] {d['message']}"
+    if d["status"] == "LOW_CONFIDENCE":
+        return f"[LOW_CONFIDENCE] {d['message']}"
     if d["status"] == "RENDER_ERROR":
         return f"[RENDER_ERROR] {d['message']}"
 
@@ -1728,15 +1767,20 @@ def deal_card_create(
     photo: str = "",
     eyebrow: str = "",
     allow_no_photo: bool = False,
+    allow_estimated: bool = False,
 ) -> ToolResult:
     """지번 하나로 실거래 데이터카드 PNG 1장(4:5)을 만든다 — 조회부터 이미지까지.
 
     카드에 들어가는 값은 전부 실거래·건축물대장 실측값이다(매매가·토지/연면적·
     평단가·용도지역·준공연도·거래일·매도매수). 홍보 문구는 넣지 않는다.
 
-    **매칭 신뢰도가 카드에 배지로 찍힌다.** 이미지가 손을 떠난 뒤에는 대화로
-    고지할 수 없기 때문이며, '추정매칭' 이하는 색으로 구분된다. 고객에게 내밀기
-    전에 match_explain 으로 근거를 확인시키는 걸 권한다.
+    **추정매칭 이하(신뢰도 0.90 미만)는 기본적으로 만들지 않고 LOW_CONFIDENCE 로
+    멈춘다** — 카드는 대화를 떠나 고객 손에 가는데, 지번이 확정되지 않은 건은 옆
+    건물 실거래가가 이 건물 값으로 박힌 이미지가 될 수 있기 때문이다. 이때는
+    재시도하지 말고 match_explain 으로 근거를 확인시킨 뒤, 사용자가 발행하기로
+    정하면 allow_estimated=true 로 재호출한다.
+    **통과한 카드에는 매칭 신뢰도가 배지로 찍힌다.** 이미지가 손을 떠난 뒤에는
+    대화로 고지할 수 없기 때문이며, '추정매칭' 이하는 색으로 구분된다.
 
     **사진이 없으면 렌더하지 않고 PHOTO_MISSING 으로 멈춘다** — 카드는 건물 사진
     위에 수치를 얹는 형태라, 사진이 없으면 회색 판이 나가고 결국 다시 만들게 된다.
@@ -1750,7 +1794,8 @@ def deal_card_create(
 
     최초 1회 `playwright install chromium` 이 필요하다.
     """
-    data = _deal_card_create_payload(address, months, photo, eyebrow, allow_no_photo)
+    data = _deal_card_create_payload(address, months, photo, eyebrow,
+                                     allow_no_photo, allow_estimated)
     return ToolResult(content=_render_deal_card_create(data), structured_content=data,
                       is_error=data["status"] in _IS_ERROR_STATUSES
                       or data["status"] == "RENDER_ERROR")

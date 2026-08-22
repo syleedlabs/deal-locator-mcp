@@ -85,7 +85,17 @@ def _call(**kw: Any) -> dict[str, Any]:
     kw.setdefault("photo", "")
     kw.setdefault("eyebrow", "")
     kw.setdefault("allow_no_photo", False)
+    kw.setdefault("allow_estimated", False)
     return S._deal_card_create_payload(**kw)
+
+
+def _low_conf(monkeypatch: pytest.MonkeyPatch, score: float = 0.60,
+              label: str = "추정매칭") -> None:
+    """최신 거래를 추정매칭(저신뢰)으로 바꾼다."""
+    t = _tx(confidence=label, confidence_score=score, match_stage="stage3",
+            caveat="추정매칭 — 동일 스펙 인접 건물 가능성. 공부(등기/대장) 대조로 확정하세요.")
+    monkeypatch.setattr(S, "_cached_lookup",
+                        lambda address, months: _res(transactions=[t], latest=t))
 
 
 # ── 사진 게이트 ────────────────────────────────────────────────────────
@@ -161,6 +171,79 @@ def test_신뢰도는_카드로_전달된다(spy: dict[str, Any]) -> None:
     assert spy["spec"]["confidence_score"] == 0.97
 
 
+# ── 신뢰도 게이트 (2026-08-22 이슈: 카드 신뢰도 게이트 부재) ──────────
+#
+# 카드 PNG 는 대화를 떠나 고객 손에 간다 — 이 도구 산출물 중 유일하게 맥락 없이
+# 유통되는 물건이다. '추정매칭'은 정의상 "동일 스펙 옆 건물일 수 있다"는 상태라,
+# 배지(표기)만으로는 받는 사람이 읽는다는 보장이 없다. 그래서 사진 게이트와 같은
+# 관용구로 **기본 차단 + 사람이 의식적으로 통과**시키게 하고, 통과한 카드에는
+# 배지를 계속 찍는다(차단+각인 하이브리드).
+
+def test_추정매칭이면_렌더하지_않고_멈춘다(monkeypatch, spy: dict[str, Any]) -> None:
+    _low_conf(monkeypatch)
+    d = _call(allow_no_photo=True)
+    assert d["status"] == "LOW_CONFIDENCE"
+    assert spy.get("calls") is None, "게이트가 걸렸는데 렌더러가 호출됐다"
+    assert d["out_png"] == ""
+
+
+def test_저신뢰_메시지는_통과법과_근거확인을_안내한다(monkeypatch, spy) -> None:
+    _low_conf(monkeypatch)
+    d = _call(allow_no_photo=True)
+    assert "allow_estimated" in d["message"], "통과 방법을 알려줘야 한다"
+    assert "match_explain" in d["message"], "근거 확인 경로를 알려줘야 한다"
+    assert d["confidence"] == "추정매칭" and d["confidence_score"] == 0.60
+
+
+def test_인접후보도_차단된다(monkeypatch, spy: dict[str, Any]) -> None:
+    _low_conf(monkeypatch, score=0.50, label="인접후보")
+    assert _call(allow_no_photo=True)["status"] == "LOW_CONFIDENCE"
+    assert spy.get("calls") is None
+
+
+def test_allow_estimated_면_통과하고_배지는_그대로_찍힌다(monkeypatch, spy) -> None:
+    """차단을 풀어도 '각인'은 유지된다 — 이미지가 손을 떠난 뒤의 유일한 고지 수단."""
+    _low_conf(monkeypatch)
+    d = _call(allow_no_photo=True, allow_estimated=True)
+    assert d["status"] == "OK"
+    assert spy["calls"] == 1
+    assert spy["spec"]["confidence"] == "추정매칭"
+    assert spy["spec"]["confidence_score"] == 0.60
+
+
+def test_정확매칭은_플래그_없이_통과한다(spy: dict[str, Any]) -> None:
+    d = _call(allow_no_photo=True)          # 기본 픽스처 = 정확매칭 0.97
+    assert d["status"] == "OK"
+    assert spy["calls"] == 1
+
+
+def test_신뢰도_게이트는_사진게이트보다_먼저_걸린다(monkeypatch, spy) -> None:
+    """사진도 없고 신뢰도도 낮으면 — 더 치명적인 쪽(지번 미확정)을 먼저 알린다.
+    사진을 구해 온 뒤에야 '사실 지번이 미확정'을 듣게 되면 헛수고가 된다."""
+    _low_conf(monkeypatch)
+    d = _call()                              # allow_no_photo=False, 사진 미지정
+    assert d["status"] == "LOW_CONFIDENCE"
+    assert spy.get("calls") is None
+
+
+def test_LOW_CONFIDENCE_는_에러가_아니다() -> None:
+    """isError 로 나가면 LLM 이 자동 재시도하거나 '오류'로 전달한다 —
+    추정매칭 발행 여부는 사람이 정할 일이므로 실패가 아니다."""
+    assert "LOW_CONFIDENCE" not in S._IS_ERROR_STATUSES
+
+
+def test_툴_호출은_LOW_CONFIDENCE_를_에러로_내보내지_않는다(monkeypatch, spy) -> None:
+    _low_conf(monkeypatch)
+    r = asyncio.run(_tool_call(allow_no_photo=True))
+    assert r.structured_content["status"] == "LOW_CONFIDENCE"
+    assert r.is_error is False
+
+
+def test_출력스키마에_LOW_CONFIDENCE_가_있다() -> None:
+    enum = S.DEAL_CARD_CREATE_OUTPUT_SCHEMA["properties"]["status"]["enum"]
+    assert "LOW_CONFIDENCE" in enum
+
+
 # ── 매매가 표기 (반올림 — 절사 금지) ───────────────────────────────────
 
 @pytest.mark.parametrize("manwon,expect", [
@@ -200,11 +283,12 @@ def test_툴_호출은_PHOTO_MISSING_을_에러로_내보내지_않는다(spy: d
     assert r.is_error is False
 
 
-async def _tool_call():
+async def _tool_call(**kw: Any):
     from fastmcp import Client
+    args = {"address": "종로구 소격동 86", "months": 60}
+    args.update(kw)
     async with Client(S.mcp) as c:
-        return await c.call_tool("deal_card_create",
-                                 {"address": "종로구 소격동 86", "months": 60})
+        return await c.call_tool("deal_card_create", args)
 
 
 # ── 보안 회귀 (2026-07-22 감사 반영) ───────────────────────────────────
