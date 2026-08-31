@@ -16,15 +16,26 @@ from deal_locator import warm as W
 
 # ── 월 키 ──────────────────────────────────────────────────────────────
 
-def test_month_keys_counts_back_from_previous_month() -> None:
-    """이번 달이 아니라 직전 달부터 센다(이번 달은 신고 전이라 비어 있다)."""
+def test_month_keys_counts_back_from_current_month() -> None:
+    """이번 달부터 센다.
+
+    v1.5.0 이전엔 직전 달부터 셌다(당월은 신고 전이라 비어 있다는 이유). 그러나
+    당월을 빼면 며칠 전 체결된 거래가 조회에서 사라져 '거래없음'으로 답하게 된다
+    — 실측으로 1,200억 거래(2026-08-26)가 5일 뒤 NOT_FOUND 였다.
+    """
     keys = W.month_keys(3, datetime(2026, 3, 15))
-    assert keys == ["202602", "202601", "202512"]
+    assert keys == ["202603", "202602", "202601"]
 
 
 def test_month_keys_crosses_year_boundary() -> None:
     keys = W.month_keys(2, datetime(2026, 1, 10))
-    assert keys == ["202512", "202511"]
+    assert keys == ["202601", "202512"]
+
+
+def test_month_keys_includes_current_month() -> None:
+    """회귀 방지: 목록의 첫 항목은 언제나 당월이어야 한다."""
+    now = datetime(2026, 8, 31)
+    assert W.month_keys(12, now)[0] == "202608"
 
 
 def test_month_keys_length_matches_months() -> None:
