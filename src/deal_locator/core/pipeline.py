@@ -407,13 +407,17 @@ class RealEstateDataPipeline:
                 )
                 break
 
-            # i개월 전 계산 (dateutil 사용)
+            # i개월 전 계산 (dateutil 사용). i=0 = 당월(이번 달).
+            # 당월은 신고(계약일로부터 30일)가 진행 중이라 표본이 얇지만, 빼면
+            # '며칠 전 팔린 건물'에 거래없음(NOT_FOUND)이라 답하게 된다 —
+            # 얇은 표본은 고지로 다루고 누락은 만들지 않는다.
+            # warm.month_keys 와 같은 규칙(둘이 어긋나면 캐시가 헛돈다).
             try:
                 from dateutil.relativedelta import relativedelta
-                target_date = now - relativedelta(months=i + 1)
+                target_date = now - relativedelta(months=i)
             except ImportError:
                 # dateutil 없으면 순차 감산 방식 폴백
-                m = now.month - (i + 1)
+                m = now.month - i
                 y = now.year
                 while m <= 0:
                     m += 12

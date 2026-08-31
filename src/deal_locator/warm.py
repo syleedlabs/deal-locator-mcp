@@ -35,11 +35,13 @@ logger = logging.getLogger("deal_locator.warm")
 def month_keys(months: int, now: datetime) -> list[str]:
     """최근 N개월의 'YYYYMM' 목록 (fetch_from_api_multi_month 와 같은 규칙).
 
-    이번 달은 신고가 아직 안 들어와 비어 있는 경우가 많아 **직전 달부터** 센다.
+    **이번 달부터** 센다. 당월은 신고(계약일로부터 30일)가 진행 중이라 표본이
+    얇지만, 빼면 며칠 전 체결된 거래가 조회에서 통째로 사라져 '거래없음'
+    오답이 된다(실측: 1,200억 거래 5일 뒤 NOT_FOUND). 얇은 표본은 고지로 다룬다.
     """
     out: list[str] = []
     for i in range(months):
-        m = now.month - (i + 1)
+        m = now.month - i
         y = now.year
         while m <= 0:
             m += 12

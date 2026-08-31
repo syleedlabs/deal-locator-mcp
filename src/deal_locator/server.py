@@ -253,6 +253,25 @@ def _fmt_tx_line(t: dict[str, Any]) -> str:
     return " · ".join(bits)
 
 
+def _current_month_note(res: dict[str, Any]) -> str:
+    """당월 표본 고지.
+
+    조회 창은 당월부터 센다(v1.5.0). 당월은 계약일로부터 30일인 신고기한이
+    아직 안 지나 거래가 계속 들어온다 — 지금 0건이어도 '거래가 없었다'는 뜻이
+    아니다. 거래가 없을 때(오해가 가장 큰 경우)와 최신 거래가 당월일 때 붙인다.
+    """
+    from datetime import datetime as _dt
+
+    this_month = _dt.now().strftime("%Y-%m")
+    txs = res.get("transactions") or []
+    latest = txs[0] if txs else None
+    latest_ym = str((latest or {}).get("deal_date", ""))[:7]
+    if not txs or latest_ym == this_month:
+        return (f"※ {this_month} 은 신고 진행 중(계약일로부터 30일) — "
+                f"당월 거래는 이후 더 늘어날 수 있다")
+    return ""
+
+
 def _context_notes(res: dict[str, Any]) -> list[str]:
     out = []
     mc = res.get("match_context") or {}
@@ -267,6 +286,9 @@ def _context_notes(res: dict[str, Any]) -> list[str]:
         out.append(f"※ 다필지 대지(필지 {len(mc['lot_set'])}개: {', '.join(mc['lot_set'])}) — 대지면적 비교 완화 적용")
     if res.get("cancelled_count"):
         out.append(f"※ 해제신고 거래 {res['cancelled_count']}건 제외")
+    note = _current_month_note(res)
+    if note:
+        out.append(note)
     return out
 
 
