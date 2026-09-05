@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastmcp import FastMCP
-from fastmcp.tools.tool import ToolResult
+from fastmcp.tools import ToolResult
 
 from deal_locator.core import PipelineConfig, RealEstateDataPipeline, SEOUL_GU_CODES
 from deal_locator.core.lookup import (

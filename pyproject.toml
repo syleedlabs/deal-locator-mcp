@@ -4,14 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "deal-locator-mcp"
-version = "1.5.0"
+version = "1.5.1"
 description = "국토부 실거래가 × 건축물대장 역매칭 MCP — 마스킹된 실거래 지번을 특정한다 (서울 상업업무용 v1)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 keywords = ["mcp", "실거래가", "부동산", "공인중개사", "건축물대장"]
 dependencies = [
-    "fastmcp>=2.0",
+    "fastmcp>=2.0,<4",
     # ↓ deal_locator.core 데이터 파이프라인 의존
     "pandas>=2.0",
     "numpy>=1.24",

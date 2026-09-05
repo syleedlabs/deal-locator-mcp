@@ -409,7 +409,7 @@ wheels = [
 
 [[package]]
 name = "deal-locator-mcp"
-version = "1.0.0"
+version = "1.5.1"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
@@ -432,7 +432,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fastmcp", specifier = ">=2.0" },
+    { name = "fastmcp", specifier = ">=2.0,<4" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "numpy", specifier = ">=1.24" },
