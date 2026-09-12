@@ -1288,6 +1288,62 @@ class RealEstateDataPipeline:
         self._attached_cache[cache_key] = idx
         return idx
 
+    # 표제부 페이지 재시도 상한. 한 페이지가 이만큼 연속 실패하면 포기한다.
+    _PYOJE_PAGE_ATTEMPTS = 5
+
+    def _fetch_pyoje_page(
+        self, url: str, params: dict, gu_name: str, dong_name: str, page: int,
+    ) -> Optional[dict]:
+        """표제부 1페이지를 재시도하며 받아 파싱 결과를 돌려준다 (최종 실패면 None).
+
+        재시도 대상은 네 가지 **모두**다:
+          ① 연결·읽기 예외  ② HTTP 5xx·429  ③ HTTP 200 + 빈 본문  ④ 본문 파싱 실패
+
+        ③④ 가 핵심이다. 평문 HTTP 구간에서 중간 장비가 응답을 끊으면 상태코드는
+        200 인데 본문이 비어 오고, 예전 코드는 이걸 재시도 없이 중단해 버려
+        페이지네이션이 조용히 잘렸다(실측: 방배동 5,432건 중 1,000건만 적재 →
+        실재하는 지번이 '표제부없음'으로 오판). https 전환으로 발생률은 크게
+        줄었지만, 재시도로도 막아 둔다.
+        """
+        import json as _json
+        import time as _time
+
+        import requests
+        import xmltodict
+
+        last = ""
+        for attempt in range(self._PYOJE_PAGE_ATTEMPTS):
+            if attempt:
+                _time.sleep(min(2 ** (attempt - 1), 8))
+            try:
+                resp = requests.get(url, params=params, timeout=15)
+            except requests.RequestException as e:
+                last = f"연결 실패({redact_secrets(e)})"
+                continue
+            if resp.status_code != 200:
+                last = f"HTTP {resp.status_code}"
+                continue
+            if not resp.text.strip():
+                last = "HTTP 200 + 빈 본문"
+                continue
+            try:
+                # _type=xml 을 무시하고 JSON 이 오는 경우까지 겸용 파싱.
+                # 실측 JSON 은 top-level 이 {header, body} 라 response 로
+                # 감싸지만, response 래퍼가 이미 있는 형태도 수용한다.
+                if resp.text.lstrip().startswith("{"):
+                    payload = _json.loads(resp.text)
+                    return payload if "response" in payload else {"response": payload}
+                return xmltodict.parse(
+                    resp.text, disable_entities=True, process_namespaces=False
+                )
+            except Exception:  # noqa: BLE001
+                last = "응답 파싱 실패"
+        logger.warning(
+            f"표제부 API 페이지 {page} 최종 실패"
+            f"({self._PYOJE_PAGE_ATTEMPTS}회, {last}): {gu_name} {dong_name}"
+        )
+        return None
+
     def _fetch_pyoje_api(self, gu_name: str, dong_name: str) -> pd.DataFrame:
         """BuildingLedger API로 표제부를 조회합니다."""
         api_key = self._get_api_key()
@@ -1336,53 +1392,10 @@ class RealEstateDataPipeline:
                     # XML 을 명시하지 않으면 xmltodict 파싱이 전면 실패한다.
                     "_type": "xml",
                 }
-                # 페이지 단위 재시도 — 큰 동은 80페이지+ 라 중간 타임아웃/5xx 1회로
-                # 전체를 버리면 앵커가 전멸한다. HTTP 5xx·429 는 data.go.kr 의
-                # 일시 장애이므로 지수 백오프로 재시도한다(비200 즉시 포기 금지).
-                import time as _time
-                resp = None
-                for attempt in range(3):
-                    try:
-                        resp = requests.get(url, params=params, timeout=15)
-                    except requests.RequestException as e:
-                        resp = None
-                        if attempt < 2:
-                            _time.sleep(2 ** attempt)
-                            continue
-                        logger.warning(
-                            f"표제부 API 페이지 {page} 실패(3회): {redact_secrets(e)}"
-                        )
-                        break
-                    if resp.status_code in (429, 500, 502, 503, 504) and attempt < 2:
-                        _time.sleep(2 ** attempt)
-                        continue
-                    break
-                if resp is None:
-                    fetch_complete = False
-                    break
-
-                if resp.status_code != 200:
-                    logger.warning(
-                        f"표제부 API HTTP {resp.status_code} (재시도 후): "
-                        f"{gu_name} {dong_name}"
-                    )
-                    fetch_complete = False
-                    break
-
-                try:
-                    # _type=xml 을 무시하고 JSON 이 오는 경우까지 겸용 파싱.
-                    # 실측 JSON 은 top-level 이 {header, body} 라 response 로
-                    # 감싸지만, response 래퍼가 이미 있는 형태도 수용한다.
-                    if resp.text.lstrip().startswith("{"):
-                        import json as _json
-                        payload = _json.loads(resp.text)
-                        data = payload if "response" in payload else {"response": payload}
-                    else:
-                        data = xmltodict.parse(
-                            resp.text, disable_entities=True, process_namespaces=False
-                        )
-                except Exception:
-                    logger.warning(f"표제부 API 응답 파싱 실패: {gu_name} {dong_name}")
+                # 페이지 단위 재시도(_fetch_pyoje_page). 큰 동은 55페이지+ 라
+                # 중간 1회 실패로 전체를 버리면 앵커가 전멸한다.
+                data = self._fetch_pyoje_page(url, params, gu_name, dong_name, page)
+                if data is None:
                     fetch_complete = False
                     break
 
@@ -1397,6 +1410,15 @@ class RealEstateDataPipeline:
                 body = data.get("response", {}).get("body", {})
                 items = body.get("items", {}).get("item", [])
                 if not items:
+                    # 마지막 페이지 전에 items 가 비면 수신이 덜 끝난 것이다.
+                    # 예전엔 무조건 break 라 부분수신본이 '완전'으로 분류돼
+                    # 디스크 캐시에 굳고 staleness 기간 내내 앵커를 갉아먹었다.
+                    if total_count and page * 100 < total_count:
+                        logger.warning(
+                            f"표제부 수신 중단: {gu_name} {dong_name} 전체 "
+                            f"{total_count}건 중 {len(all_items)}건 (페이지 {page} 공란)"
+                        )
+                        fetch_complete = False
                     break
                 if isinstance(items, dict):
                     items = [items]
@@ -1413,6 +1435,7 @@ class RealEstateDataPipeline:
                     f"표제부 절단: {gu_name} {dong_name} 전체 {total_count}건 중 "
                     f"{max_pages * 100}건만 수신 — 뒤쪽 지번은 앵커 실패 가능"
                 )
+                fetch_complete = False  # 절단본도 '완전'이 아니다 — 디스크에 굳히지 않는다
 
             if not all_items:
                 return pd.DataFrame()
