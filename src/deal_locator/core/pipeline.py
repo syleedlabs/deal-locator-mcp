@@ -86,6 +86,46 @@ BUILDING_TYPE_COL = "유형"
 BUILDING_TYPE_KEPT = "일반"   # 통건물 (꼬마빌딩·사옥 등 한 채 통거래)
 
 
+_PYOJE_COLUMNS = [
+    "대지위치", "도로명대지위치", "연면적(㎡)", "대지면적(㎡)",
+    "사용승인일", "건축년도_매칭", "연면적_float", "대지면적_float",
+]
+
+
+def _empty_pyoje_df(complete: bool = True) -> pd.DataFrame:
+    """빈 표제부 DataFrame. complete=False 는 '조회 실패'(≠ 해당 지번 없음)."""
+    df = pd.DataFrame(columns=_PYOJE_COLUMNS)
+    df.attrs["complete"] = complete
+    return df
+
+
+def _items_to_pyoje_df(items: list[dict]) -> pd.DataFrame:
+    """건축HUB 표제부 item 목록 → 매칭용 DataFrame.
+
+    동 단위 조회(_fetch_pyoje_api)와 지번 지정 조회(load_pyoje_bon)가 같은
+    스키마를 내놓아야 앵커 로직이 어느 쪽에서 왔는지 몰라도 된다.
+    """
+    df = pd.DataFrame(items)
+    result = pd.DataFrame()
+    result["대지위치"] = df.get("platPlc", "")
+    result["도로명대지위치"] = df.get("newPlatPlc", "")
+    result["연면적(㎡)"] = pd.to_numeric(df.get("totArea"), errors="coerce")
+    result["대지면적(㎡)"] = pd.to_numeric(df.get("platArea"), errors="coerce")
+    result["사용승인일"] = df.get("useAprDay", "")
+
+    # 매칭용 파생 컬럼
+    result["건축년도_매칭"] = pd.to_numeric(
+        result["사용승인일"].astype(str).str[:4], errors="coerce"
+    )
+    result["연면적_float"] = result["연면적(㎡)"]
+    result["대지면적_float"] = result["대지면적(㎡)"]
+    # 사용승인일 결측 행도 보존한다(연면적만 필수). 무허가·미등재 노후
+    # 건물이 여기 속하는데, 이를 버리면 건축년도 결측 거래(전수의 ~15%)
+    # 의 매칭 상대가 풀에서 사라진다. 년도 필터 단계는 NaN 비교가
+    # False 라 자연 배제되므로 안전하다.
+    return result.dropna(subset=["연면적_float"])
+
+
 def filter_ilban(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
     """집합(구분상가) 거래를 걷어내고 일반(통건물)만 남긴다.
 
@@ -134,6 +174,8 @@ class RealEstateDataPipeline:
         # 부분수신본(complete=False)이 들어간 키 → 적재 시각(epoch).
         # 잘린 앵커풀을 프로세스 수명 내내 재사용하면 재조회해도 결과가 안 변한다.
         self._pyoje_partial_at: dict[str, float] = {}
+        # 지번 지정 조회 캐시: "{구}_{동}_{본번}" → DataFrame
+        self._pyoje_bon_cache: dict[str, pd.DataFrame] = {}
         # 부속지번 인덱스 메모리 캐시 (구_동 키)
         self._attached_cache: dict[str, AttachedJibunIndex] = {}
         # 법정동코드 매핑 캐시
@@ -162,6 +204,7 @@ class RealEstateDataPipeline:
         # [H1] 재초기화 시 캐시 클리어
         self._pyoje_cache.clear()
         self._pyoje_partial_at.clear()
+        self._pyoje_bon_cache.clear()
         self._attached_cache.clear()
         self._bdong_codes = None
 
@@ -1449,7 +1492,8 @@ class RealEstateDataPipeline:
                     break
 
                 body = data.get("response", {}).get("body", {})
-                items = body.get("items", {}).get("item", [])
+                # 결과 0건이면 <items/> 가 None 으로 파싱된다 — .get 호출 금지
+                items = (body.get("items") or {}).get("item", [])
                 if not items:
                     # 마지막 페이지 전에 items 가 비면 수신이 덜 끝난 것이다.
                     # 예전엔 무조건 break 라 부분수신본이 '완전'으로 분류돼
@@ -1481,26 +1525,7 @@ class RealEstateDataPipeline:
             if not all_items:
                 return pd.DataFrame()
 
-            # API 응답 -> 매칭용 DataFrame 변환
-            df = pd.DataFrame(all_items)
-            result = pd.DataFrame()
-            result["대지위치"] = df.get("platPlc", "")
-            result["도로명대지위치"] = df.get("newPlatPlc", "")
-            result["연면적(㎡)"] = pd.to_numeric(df.get("totArea"), errors="coerce")
-            result["대지면적(㎡)"] = pd.to_numeric(df.get("platArea"), errors="coerce")
-            result["사용승인일"] = df.get("useAprDay", "")
-
-            # 매칭용 파생 컬럼
-            result["건축년도_매칭"] = pd.to_numeric(
-                result["사용승인일"].astype(str).str[:4], errors="coerce"
-            )
-            result["연면적_float"] = result["연면적(㎡)"]
-            result["대지면적_float"] = result["대지면적(㎡)"]
-            # 사용승인일 결측 행도 보존한다(연면적만 필수). 무허가·미등재 노후
-            # 건물이 여기 속하는데, 이를 버리면 건축년도 결측 거래(전수의 ~15%)
-            # 의 매칭 상대가 풀에서 사라진다. 년도 필터 단계는 NaN 비교가
-            # False 라 자연 배제되므로 안전하다.
-            result = result.dropna(subset=["연면적_float"])
+            result = _items_to_pyoje_df(all_items)
 
             logger.info(
                 f"표제부 API 조회: {gu_name} {dong_name} - {len(result)}건 "
@@ -1550,6 +1575,93 @@ class RealEstateDataPipeline:
         except Exception as e:
             logger.debug(f"법정동코드 조회 실패 ({gu_name} {dong_name}): {e}")
             return ""
+
+    def load_pyoje_bon(
+        self, gu_name: str, dong_name: str, bonbun: str,
+    ) -> pd.DataFrame:
+        """본번 하나의 표제부만 조회한다 (단건 지번 조회용).
+
+        단건 조회가 동 전체를 긁을 이유는 없다. 건축HUB getBrTitleInfo 는 bun
+        파라미터를 받으므로 보통 1회 호출로 끝난다(실측: 방배동 bun=0910 → 14건,
+        1페이지). 동 단위 수집의 절단·오염 실패모드가 이 경로에서 사라지고,
+        첫 조회도 13.8초(방배동 55페이지) → 1초 미만이 된다.
+
+        부번 전체를 받는 이유: 마스킹 지번('910-**')은 본번만 남으므로 인접
+        부번이 그대로 후보 모수가 된다 — find_bunji_neighbors 가 쓰는 풀과 같다.
+
+        동 전체 풀이 이미 온전하게 적재돼 있으면(예: area_scan 이 방금 불러옴)
+        추가 호출 없이 그걸 그대로 돌려준다.
+
+        Returns:
+            표제부 DataFrame. attrs["complete"] 가 False 면 조회 자체가 실패한
+            것이다 — '해당 지번 없음'과 반드시 구분해야 한다.
+        """
+        dong_key = f"{gu_name}_{dong_name}"
+        cached_dong = self._pyoje_cache.get(dong_key)
+        if cached_dong is not None and cached_dong.attrs.get("complete", True):
+            return cached_dong
+
+        bon = str(bonbun).strip()
+        if not (gu_name and dong_name and bon.isdigit()):
+            return _empty_pyoje_df(complete=False)
+
+        key = f"{dong_key}_{bon}"
+        hit = self._pyoje_bon_cache.get(key)
+        if hit is not None:
+            return hit
+
+        api_key = self._get_api_key()
+        sigungu_code = SEOUL_GU_CODES.get(gu_name, "")
+        bdong_code = self._get_bdong_code(gu_name, dong_name)
+        if not (api_key and sigungu_code and bdong_code):
+            return _empty_pyoje_df(complete=False)
+
+        from urllib.parse import unquote
+
+        url = "https://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo"
+        base = {
+            "serviceKey": unquote(api_key),
+            "sigunguCd": sigungu_code,
+            "bjdongCd": bdong_code,
+            "bun": f"{int(bon):04d}",
+            "numOfRows": "100",
+            "_type": "xml",
+        }
+
+        items: list[dict] = []
+        page, total = 1, 0
+        while page <= 20:  # 한 본번에 부번 2,000개는 없다 — 폭주 방지용 상한
+            data = self._fetch_pyoje_page(
+                url, {**base, "pageNo": str(page)}, gu_name, dong_name, page,
+            )
+            if data is None:
+                return _empty_pyoje_df(complete=False)
+            header = data.get("response", {}).get("header", {})
+            if header.get("resultCode") != "00":
+                logger.warning(f"표제부 지번조회 에러: {header.get('resultMsg')}")
+                return _empty_pyoje_df(complete=False)
+            body = data.get("response", {}).get("body", {})
+            # 결과 0건이면 <items/> 가 None 으로 파싱된다 — .get 호출 금지
+            got = (body.get("items") or {}).get("item", [])
+            if isinstance(got, dict):
+                got = [got]
+            if not got:
+                break
+            items.extend(got)
+            total = int(body.get("totalCount", 0))
+            if page * 100 >= total:
+                break
+            page += 1
+
+        df = _items_to_pyoje_df(items) if items else _empty_pyoje_df()
+        df.attrs["complete"] = True  # 조회는 성공 — 0건이면 '정말 없음'이다
+        self._pyoje_bon_cache[key] = df
+        if len(self._pyoje_bon_cache) > 500:
+            self._pyoje_bon_cache.pop(next(iter(self._pyoje_bon_cache)))
+        logger.info(
+            f"표제부 지번조회: {gu_name} {dong_name} {bon}-* - {len(df)}건"
+        )
+        return df
 
     def load_pyoje_data(self, gu_name: str, dong_name: str = "") -> pd.DataFrame:
         """표제부 로드 공개 API (API 우선 → CSV 폴백, _load_pyoje_data 위임).

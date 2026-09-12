@@ -103,11 +103,16 @@ def _last_token_bunji(jibun_full: str) -> str:
 
 def find_buildings(
     pipeline: RealEstateDataPipeline, gu: str, dong: str, bunji: str,
+    pool: Optional[pd.DataFrame] = None,
 ) -> list[dict[str, Any]]:
-    """표제부에서 해당 지번의 건축물 행을 찾는다 (여러 동이면 모두)."""
+    """표제부에서 해당 지번의 건축물 행을 찾는다 (여러 동이면 모두).
+
+    pool 을 주면 그 풀에서만 찾는다(이미 받아 둔 본번 풀 재사용). 없으면
+    본번 지정 조회로 1회 호출한다 — 동 전체를 긁지 않는다.
+    """
     if not (gu and dong and bunji):
         return []
-    df = pipeline.load_pyoje_data(gu, dong)
+    df = pool if pool is not None else pipeline.load_pyoje_bon(gu, dong, _bonbun(bunji))
     if df.empty or "대지위치" not in df.columns:
         return []
     addr = df["대지위치"].astype(str).str.replace(r"\s+", " ", regex=True)
@@ -133,6 +138,7 @@ def _bonbun(bunji: str) -> str:
 
 def find_bunji_neighbors(
     pipeline: RealEstateDataPipeline, gu: str, dong: str, bunji: str,
+    pool: Optional[pd.DataFrame] = None,
 ) -> list[dict[str, Any]]:
     """질의 지번에 건물이 없을 때, 동일 본번(예: 612-*) 표제부 건물을 후보로 수집.
 
@@ -143,7 +149,7 @@ def find_bunji_neighbors(
     bon = _bonbun(bunji)
     if not (gu and dong and bon):
         return []
-    df = pipeline.load_pyoje_data(gu, dong)
+    df = pool if pool is not None else pipeline.load_pyoje_bon(gu, dong, bon)
     if df.empty or "대지위치" not in df.columns:
         return []
     addr = df["대지위치"].astype(str).str.replace(r"\s+", " ", regex=True)
@@ -167,6 +173,15 @@ def find_bunji_neighbors(
             "bunji": b_bunji,
         })
     return out
+
+
+def _pyoje_fetch_failed_msg(gu: str, dong: str, bunji: str) -> str:
+    """표제부 '조회 실패' 메시지 — '표제부 없음'과 절대 같은 말이 되면 안 된다."""
+    return (
+        f"{gu} {dong} {bunji} — 건축물대장 표제부 조회에 실패했습니다(건축HUB 무응답). "
+        f"해당 지번이 '없다'는 뜻이 아니라 조회 자체가 실패한 것이니, "
+        f"잠시 후 다시 시도할 것. 이 응답으로 부재를 단정하지 말 것."
+    )
 
 
 def lookup_deal(
@@ -207,12 +222,21 @@ def lookup_deal(
     except Exception as e:  # noqa: BLE001
         logger.warning(f"부속지번 인덱스 로드 실패({gu} {dong}): {e}")
 
-    # 표제부 앵커 + 부속→대표 재앵커
-    buildings = find_buildings(pipeline, gu, dong, bunji)
+    # 표제부 앵커 + 부속→대표 재앵커.
+    # 본번 지정 조회 1회로 '910-*' 전체를 받아 직접·인접 후보를 함께 쓴다
+    # (동 전체 5,432건을 긁던 경로의 절단·오염 실패모드를 피한다).
+    pool = pipeline.load_pyoje_bon(gu, dong, _bonbun(bunji))
+    pool_complete = bool(pool.attrs.get("complete", True))
+    buildings = find_buildings(pipeline, gu, dong, bunji, pool=pool)
     anchor_bunji, anchor_via = bunji, "직접"
     if not buildings and atch is not None:
         for main in atch.resolve_main(bunji):
-            found = find_buildings(pipeline, gu, dong, main)
+            # 대표지번은 본번이 다를 수 있으니 그 본번 풀을 따로 받는다.
+            main_pool = (pool if _bonbun(main) == _bonbun(bunji)
+                         else pipeline.load_pyoje_bon(gu, dong, _bonbun(main)))
+            if not main_pool.attrs.get("complete", True):
+                pool_complete = False
+            found = find_buildings(pipeline, gu, dong, main, pool=main_pool)
             if found:
                 buildings, anchor_bunji, anchor_via = found, main, "부속지번"
                 break
@@ -222,8 +246,10 @@ def lookup_deal(
     # 연면적+대지+건축년도가 '정확히' 일치하면 그 거래를 후보로 회복한다(미확정).
     neighbor_mode = False
     neighbor_pool: list[dict[str, Any]] = []
-    if not buildings:
-        neighbor_pool = find_bunji_neighbors(pipeline, gu, dong, bunji)
+    if not buildings and pool_complete:
+        # 풀이 불완전하면 인접 후보도 뽑지 않는다 — 같은 잘린 풀에서 나오므로
+        # '없어서 못 찾은 것'인지 '못 받아서 못 찾은 것'인지 구분이 안 된다.
+        neighbor_pool = find_bunji_neighbors(pipeline, gu, dong, bunji, pool=pool)
         if neighbor_pool:
             neighbor_mode = True
             anchor_via = "인접본번"
@@ -254,7 +280,14 @@ def lookup_deal(
         result["message"] = f"실거래 API 조회 실패: {e!r}"
         return result
     if raw is None or raw.empty:
-        result["status"] = "거래없음" if buildings else "표제부없음"
+        if buildings:
+            result["status"] = "거래없음"
+        elif not pool_complete:
+            result["status"] = "API_오류"
+            result["message"] = _pyoje_fetch_failed_msg(gu, dong, bunji)
+            return result
+        else:
+            result["status"] = "표제부없음"
         result["message"] = f"{gu} 상업업무용 실거래 데이터 없음 (기간 {months}개월)"
         return result
 
@@ -331,12 +364,19 @@ def lookup_deal(
             f"{gu} {dong} {bunji} — 최근 {months}개월 매칭 실거래 없음. "
             f"표제부: 준공 {result['building']['build_year']}." + atch_note
         )
+    elif not pool_complete:
+        # 핵심: '조회 실패'를 '진짜 없음'으로 내보내면 안 된다. 예전엔 둘을
+        # 구분하지 않아, 실재하는 지번이 "번지 오타/신축/멸실 가능"으로
+        # 응답되고 사용자가 그걸 믿고 발행을 접었다.
+        result["status"] = "API_오류"
+        result["message"] = _pyoje_fetch_failed_msg(gu, dong, bunji)
     else:
         result["status"] = "표제부없음"
         result["message"] = (
             f"{gu} {dong} {bunji} — 표제부·매칭 실거래 모두 없음 "
             f"(번지 오타/신축/멸실 가능)." + atch_note
         )
+    result["match_context"]["anchor_pool_complete"] = pool_complete
     return result
 
 
