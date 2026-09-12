@@ -643,7 +643,7 @@ def scan_area(
         "jiphap_excluded": 0,
         "cancelled_count": 0, "ppp_uncomputable": 0, "price_excluded": 0,
         "road_unknown": 0, "road_filtered_out": 0, "road_unknown_reasons": {},
-        "truncated": 0, "stats": {},
+        "truncated": 0, "stats": {}, "pyoje_partial": False,
         "band": (ppp_min_manwon, ppp_max_manwon), "road_contains": road_contains,
         "message": "",
     }
@@ -747,6 +747,12 @@ def scan_area(
         sub = pipeline.bulk_match(sub)
     except Exception as e:  # noqa: BLE001
         logger.warning(f"scan_area 표제부 역매칭 실패({gu} {dong}): {e}")
+    # 앵커풀이 잘린 채 역매칭했다면 복원율이 실제보다 낮게 나온다. 교차검증
+    # 용도로 이 결과를 쓰는 소비자에게 그 사실을 숨기면 안 된다.
+    try:
+        result["pyoje_partial"] = not pipeline.pyoje_pool_complete(gu, dong)
+    except Exception:  # noqa: BLE001 — 계측 실패가 조회를 막지 않는다
+        pass
 
     road_q = road_contains.strip()
     deals: list[dict[str, Any]] = []

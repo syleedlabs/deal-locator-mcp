@@ -1135,6 +1135,13 @@ _COVERAGE_SCHEMA = {
         },
         "matched": {"type": "integer", "description": "최종 부합 건수(= deals 길이)"},
         "truncated": {"type": "integer", "description": "limit 초과로 생략된 건수"},
+        "pyoje_partial": {
+            "type": "boolean",
+            "description": (
+                "true 면 표제부 앵커풀을 덜 받은 채 역매칭한 것 — 주소 미상이 "
+                "실제보다 많이 나온다. 이 결과로 '지번 특정 불가'를 단정하지 말 것."
+            ),
+        },
     },
     "required": ["total_in_dong", "matched", "truncated"],
 }
@@ -1292,7 +1299,8 @@ def _area_scan_payload(
         "filter": {"min_manwon_per_gross_pyeong": lo,
                    "max_manwon_per_gross_pyeong": hi,
                    "road_contains": road_q, "limit": limit},
-        "coverage": {"total_in_dong": 0, "jiphap_excluded": 0, "cancelled_count": 0,
+        "coverage": {"pyoje_partial": False,
+                     "total_in_dong": 0, "jiphap_excluded": 0, "cancelled_count": 0,
                      "ppp_uncomputable": 0,
                      "price_excluded": 0, "road_unknown": 0, "road_filtered_out": 0,
                      "road_unknown_reasons": [], "matched": 0, "truncated": 0},
@@ -1332,6 +1340,7 @@ def _area_scan_payload(
                               sorted(reasons.items(), key=lambda kv: -kv[1])],
         matched=len(deals),
         truncated=res.get("truncated", 0),
+        pyoje_partial=bool(res.get("pyoje_partial", False)),
     )
     d["stats"] = res.get("stats") or {}
     d["deals"] = deals

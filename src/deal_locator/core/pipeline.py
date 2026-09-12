@@ -1576,6 +1576,16 @@ class RealEstateDataPipeline:
             logger.debug(f"법정동코드 조회 실패 ({gu_name} {dong_name}): {e}")
             return ""
 
+    def pyoje_pool_complete(self, gu_name: str, dong_name: str) -> bool:
+        """방금 쓴 동 단위 표제부 앵커풀이 온전했는지.
+
+        False 면 역매칭 모수가 잘린 상태라 복원율이 실제보다 낮게 나온다.
+        미조회 동은 True(판단 보류 아님 — 잘렸다는 근거가 없음).
+        df.attrs 는 필터링 과정에서 유실될 수 있어 캐시 원본에서 직접 읽는다.
+        """
+        df = self._pyoje_cache.get(f"{gu_name}_{dong_name}")
+        return True if df is None else bool(df.attrs.get("complete", True))
+
     def load_pyoje_bon(
         self, gu_name: str, dong_name: str, bonbun: str,
     ) -> pd.DataFrame:
