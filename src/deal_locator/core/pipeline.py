@@ -1310,7 +1310,11 @@ class RealEstateDataPipeline:
             from urllib.parse import unquote
 
             decoded_key = unquote(api_key)
-            url = "http://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo"
+            # https 고정 — 평문 HTTP(80)는 일부 네트워크에서 중간 장비에 끊겨
+            # "200 + 빈 본문"·ConnectTimeout 으로 돌아오고, 그게 페이지네이션을
+            # 중간에 끊어 앵커풀을 조용히 잘라낸다(2026-09 실측: http 7/10·평균
+            # 11.7초 vs https 10/10·평균 0.38초).
+            url = "https://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo"
 
             all_items: list[dict] = []
             page = 1

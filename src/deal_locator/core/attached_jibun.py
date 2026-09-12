@@ -25,7 +25,10 @@ from .constants import redact_secrets
 
 logger = logging.getLogger("deal_locator.attached_jibun")
 
-ATCH_JIBUN_URL = "http://apis.data.go.kr/1613000/BldRgstHubService/getBrAtchJibunInfo"
+# https 고정 — 평문 HTTP(80)는 일부 네트워크에서 중간 장비에 끊겨 "200 + 빈 본문"
+# 이나 ConnectTimeout 으로 돌아온다(2026-09 실측: http 7/10·평균 11.7초 vs
+# https 10/10·평균 0.38초). 표제부와 같은 호스트라 같은 규칙을 적용한다.
+ATCH_JIBUN_URL = "https://apis.data.go.kr/1613000/BldRgstHubService/getBrAtchJibunInfo"
 
 
 def _norm_bun_ji(bun: Any, ji: Any) -> str:
