@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Optional
@@ -130,6 +131,9 @@ class RealEstateDataPipeline:
         # 표제부 데이터 메모리 캐시 (구_동 키, 최대 100 엔트리)
         self._pyoje_cache: dict[str, pd.DataFrame] = {}
         self._pyoje_cache_max: int = 100
+        # 부분수신본(complete=False)이 들어간 키 → 적재 시각(epoch).
+        # 잘린 앵커풀을 프로세스 수명 내내 재사용하면 재조회해도 결과가 안 변한다.
+        self._pyoje_partial_at: dict[str, float] = {}
         # 부속지번 인덱스 메모리 캐시 (구_동 키)
         self._attached_cache: dict[str, AttachedJibunIndex] = {}
         # 법정동코드 매핑 캐시
@@ -157,6 +161,7 @@ class RealEstateDataPipeline:
 
         # [H1] 재초기화 시 캐시 클리어
         self._pyoje_cache.clear()
+        self._pyoje_partial_at.clear()
         self._attached_cache.clear()
         self._bdong_codes = None
 
@@ -1095,6 +1100,7 @@ class RealEstateDataPipeline:
         while len(self._pyoje_cache) > self._pyoje_cache_max:
             oldest_key = next(iter(self._pyoje_cache))
             del self._pyoje_cache[oldest_key]
+            self._pyoje_partial_at.pop(oldest_key, None)
 
     # 최근 N개월은 신고가 계속 들어와 값이 변한다(계약 후 30일 이내 신고 의무).
     # 그 이전 월은 해제신고 정정 정도만 생기므로 오래 캐시해도 안전하다.
@@ -1168,7 +1174,17 @@ class RealEstateDataPipeline:
         """
         cache_key = f"{gu_name}_{dong_name}" if dong_name else gu_name
         if cache_key in self._pyoje_cache:
-            return self._pyoje_cache[cache_key]
+            # 부분수신본은 짧게만 붙잡는다. 예전엔 무기한 재사용이라 한 번의
+            # 중단이 프로세스 수명 내내 '표제부없음' 오판을 고정시켰다 —
+            # 사용자가 몇 번을 재조회해도 결과가 안 바뀐 원인이 이것이다.
+            # 반대로 아예 캐시하지 않으면 lookup_deal 1회가 동 전체를 3~5회
+            # 다시 긁는 폭주가 나므로, 짧은 유예(_PYOJE_PARTIAL_TTL)를 둔다.
+            stamped = self._pyoje_partial_at.get(cache_key)
+            if stamped is None or (time.time() - stamped) < self._PYOJE_PARTIAL_TTL:
+                return self._pyoje_cache[cache_key]
+            logger.info(f"표제부 부분수신본 만료 → 재조회 ({cache_key})")
+            del self._pyoje_cache[cache_key]
+            del self._pyoje_partial_at[cache_key]
 
         disk = self._pyoje_disk_path(cache_key) if dong_name else None
 
@@ -1201,8 +1217,30 @@ class RealEstateDataPipeline:
                     logger.warning(
                         f"표제부 부분수신({cache_key}) — 디스크 캐시 저장 건너뜀"
                     )
+                    # 만료됐어도 '완전한' 디스크 캐시가 더 크면 그쪽이 낫다.
+                    # 잘린 최신본보다 온전한 옛본이 앵커를 더 많이 살린다.
+                    if disk.exists():
+                        try:
+                            df_old = pd.read_csv(
+                                disk, encoding="utf-8-sig", low_memory=False
+                            )
+                            if len(df_old) > len(df_api):
+                                logger.info(
+                                    f"표제부 부분수신({len(df_api)}행) < 만료 캐시"
+                                    f"({len(df_old)}행) — 만료 캐시 사용 ({cache_key})"
+                                )
+                                self._evict_pyoje_cache()
+                                self._pyoje_cache[cache_key] = df_old
+                                self._pyoje_partial_at.pop(cache_key, None)
+                                return df_old
+                        except Exception:  # noqa: BLE001
+                            pass
                 self._evict_pyoje_cache()
                 self._pyoje_cache[cache_key] = df_api
+                if df_api.attrs.get("complete", True):
+                    self._pyoje_partial_at.pop(cache_key, None)
+                else:
+                    self._pyoje_partial_at[cache_key] = time.time()
                 return df_api
 
             # API 실패 → 만료됐어도 디스크 캐시 폴백
@@ -1290,6 +1328,9 @@ class RealEstateDataPipeline:
 
     # 표제부 페이지 재시도 상한. 한 페이지가 이만큼 연속 실패하면 포기한다.
     _PYOJE_PAGE_ATTEMPTS = 5
+    # 부분수신본을 메모리에 붙잡아 두는 시간(초). 재조회 폭주는 막되,
+    # 잘린 앵커풀이 프로세스 수명 내내 고정되는 것도 막는 절충값.
+    _PYOJE_PARTIAL_TTL = 60.0
 
     def _fetch_pyoje_page(
         self, url: str, params: dict, gu_name: str, dong_name: str, page: int,
