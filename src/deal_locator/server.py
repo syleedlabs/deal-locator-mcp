@@ -2193,6 +2193,26 @@ _ENV_ALLOWLIST = frozenset({
     "DEAL_LOCATOR_EXPORT_DIR",
 })
 
+# 저장·캐시 폴더 키는 **신뢰 파일에서만** 받는다(명시 지정 파일·홈 고정 경로).
+# 작업 폴더(cwd·상위) .env 는 남이 만든 폴더일 수 있다 — 거기서 캐시 폴더를 바꾸면
+# 함께 넣어 둔 조작된 캐시 CSV 가 API 호출 없이 실측값으로 신뢰돼, 가짜 매매가가
+# '정확매칭'으로 카드·CSV 에 찍힌다. 인증키는 기존대로 작업 폴더에서도 읽는다.
+_ENV_DIR_KEYS = frozenset({
+    "DEAL_LOCATOR_CACHE_DIR",
+    "DEAL_LOCATOR_CARD_DIR",
+    "DEAL_LOCATOR_EXPORT_DIR",
+})
+
+
+def _trusted_env_files() -> set[Path]:
+    """폴더 키를 받아도 되는 .env — 사용자가 지정했거나 사용자 소유 고정 경로."""
+    home = Path.home()
+    out = {home / ".deal-locator.env", home / ".config" / "deal-locator" / ".env"}
+    explicit = os.environ.get("DEAL_LOCATOR_ENV_FILE", "").strip()
+    if explicit:
+        out.add(Path(explicit).expanduser())
+    return out
+
 
 def _load_dotenv_fallback() -> None:
     """환경변수에 키가 없으면 .env 에서 보충한다 (탐색 경로는 _env_candidates).
@@ -2204,6 +2224,7 @@ def _load_dotenv_fallback() -> None:
     """
     if _key_ok():
         return
+    trusted = _trusted_env_files()
     for p in _env_candidates():
         if not p.is_file():
             continue
@@ -2216,6 +2237,8 @@ def _load_dotenv_fallback() -> None:
                 k = k.strip()
                 if k not in _ENV_ALLOWLIST:
                     continue
+                if k in _ENV_DIR_KEYS and p not in trusted:
+                    continue  # 작업 폴더 .env 는 저장·캐시 폴더를 바꾸지 못한다
                 os.environ.setdefault(k, v.strip().strip('"').strip("'"))
         except Exception:  # noqa: BLE001
             continue

@@ -166,3 +166,70 @@ def test_unreadable_env_does_not_crash(tmp_path: Path,
                         lambda: [bad_dir / ".env", broken / ".env"])
     S._load_dotenv_fallback()                        # 예외 없이 통과
     assert not S._key_ok()                           # 키는 여전히 없음
+
+
+# ── 저장·캐시 폴더 키는 신뢰 파일에서만 (2026-09-14 보안 점검 R3) ────────
+
+_DIR_KEYS = ("DEAL_LOCATOR_CACHE_DIR", "DEAL_LOCATOR_CARD_DIR", "DEAL_LOCATOR_EXPORT_DIR")
+
+
+def test_작업폴더_env_는_저장폴더를_바꾸지_못한다(tmp_path: Path,
+                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    """README 권장 설정(키는 홈 파일) + 남이 만든 폴더에서 실행.
+
+    그 폴더 .env 가 캐시 폴더를 바꾸면, 함께 넣어 둔 조작된 캐시 CSV 가 API 호출
+    없이 실측값으로 신뢰된다 — 가짜 매매가가 '정확매칭' 카드로 나간다.
+    """
+    for k in _DIR_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".deal-locator.env").write_text("DEAL_LOCATOR_SERVICE_KEY=home-key\n", encoding="utf-8")
+    repo = tmp_path / "untrusted-repo"
+    repo.mkdir()
+    _write_env(repo, "".join(f"{k}={tmp_path / 'poison'}\n" for k in _DIR_KEYS))
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(repo)
+    S._load_dotenv_fallback()
+
+    assert os.environ["DEAL_LOCATOR_SERVICE_KEY"] == "home-key", "전제: 키는 홈 파일에서 온다"
+    for k in _DIR_KEYS:
+        assert k not in os.environ, f"{k} 가 작업 폴더 .env 에서 지정됨"
+
+
+def test_명시지정_파일은_저장폴더를_지정할_수_있다(tmp_path: Path,
+                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    """DEAL_LOCATOR_ENV_FILE 은 사용자가 고른 파일이다 — 폴더 키도 받는다."""
+    for k in _DIR_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    far = tmp_path / "keys.env"
+    far.write_text(f"DEAL_LOCATOR_SERVICE_KEY=k\nDEAL_LOCATOR_CARD_DIR={tmp_path / 'cards'}\n",
+                   encoding="utf-8")
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.chdir(empty)
+    monkeypatch.setenv("DEAL_LOCATOR_ENV_FILE", str(far))
+
+    S._load_dotenv_fallback()
+
+    assert os.environ["DEAL_LOCATOR_CARD_DIR"] == str(tmp_path / "cards")
+
+
+def test_홈_설정파일은_저장폴더를_지정할_수_있다(tmp_path: Path,
+                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    for k in _DIR_KEYS:
+        monkeypatch.delenv(k, raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".deal-locator.env").write_text(
+        f"DEAL_LOCATOR_SERVICE_KEY=k\nDEAL_LOCATOR_EXPORT_DIR={tmp_path / 'exports'}\n",
+        encoding="utf-8")
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(empty)
+
+    S._load_dotenv_fallback()
+
+    assert os.environ["DEAL_LOCATOR_EXPORT_DIR"] == str(tmp_path / "exports")

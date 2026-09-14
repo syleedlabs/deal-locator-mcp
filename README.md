@@ -575,6 +575,8 @@ uvx --from git+https://github.com/syleedlabs/deal-locator-mcp deal-locator-warm
 > 실행 폴더(또는 그 상위 1단계)에 `.env` 를 두면 자동으로 읽습니다(`.env.example` 참고). `.env` 는 절대 커밋하지 마세요.
 >
 > 보안상 **`DEAL_LOCATOR_*` 와 `DATA_GO_KR_API_KEY` 만 읽습니다.** `.env` 의 다른 줄은 무시합니다 — 남의 프로젝트 폴더에서 서버를 띄웠을 때 그쪽 설정(프록시 등)이 섞여 들어와 요청이 엉뚱한 서버를 경유하는 일을 막기 위함입니다.
+>
+> 저장·캐시 폴더 설정(`DEAL_LOCATOR_CARD_DIR` · `DEAL_LOCATOR_EXPORT_DIR` · `DEAL_LOCATOR_CACHE_DIR`)은 **실행 폴더의 `.env` 에서는 읽지 않습니다.** 환경변수, `DEAL_LOCATOR_ENV_FILE` 로 지정한 파일, 홈 설정 파일(`~/.deal-locator.env` · `~/.config/deal-locator/.env`)에서만 받습니다 — 남이 만든 폴더의 `.env` 가 캐시 폴더를 바꿔, 조작된 데이터를 실측값처럼 읽게 만드는 일을 막기 위함입니다.
 
 **Q. 카드 만들 때 임의 파일이 읽히지 않나요?**
 > `photo` 는 **파일 내용으로 이미지 여부를 판별**합니다(PNG·JPEG·GIF·WebP). 이미지가 아니면 렌더하지 않고 멈춥니다. 카드 렌더는 JavaScript 를 끈 상태로 돌고 모든 네트워크 요청이 차단되므로, 카드 값에 스크립트가 섞여도 실행되지 않고 외부로 나가지도 않습니다.
