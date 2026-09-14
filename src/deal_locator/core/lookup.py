@@ -30,7 +30,7 @@ from .matching import (
     norm_bunji,
     parse_address,
 )
-from .constants import SEOUL_GU_CODES
+from .constants import SEOUL_GU_CODES, redact_secrets
 from .pipeline import RealEstateDataPipeline, filter_ilban
 
 logger = logging.getLogger("deal_locator.lookup")
@@ -276,8 +276,11 @@ def lookup_deal(
     try:
         raw = pipeline.fetch_from_api_multi_month(months=months, gus=[gu])
     except Exception as e:  # noqa: BLE001
+        # 예외 원문은 응답에 싣지 않는다 — requests 예외엔 serviceKey 가 든 URL 이
+        # 들어 있다. 원인은 마스킹한 로그로만 남긴다.
+        logger.warning(f"실거래 API 조회 실패: {redact_secrets(e)}")
         result["status"] = "API_오류"
-        result["message"] = f"실거래 API 조회 실패: {e!r}"
+        result["message"] = f"실거래 API 조회 실패({type(e).__name__}) — 잠시 후 다시 시도할 것."
         return result
     if raw is None or raw.empty:
         if buildings:
@@ -528,8 +531,11 @@ def scan_gu(
     try:
         raw = pipeline.fetch_from_api_multi_month(months=months, gus=[gu])
     except Exception as e:  # noqa: BLE001
+        # 예외 원문은 응답에 싣지 않는다 — requests 예외엔 serviceKey 가 든 URL 이
+        # 들어 있다. 원인은 마스킹한 로그로만 남긴다.
+        logger.warning(f"실거래 API 조회 실패: {redact_secrets(e)}")
         result["status"] = "API_오류"
-        result["message"] = f"실거래 API 조회 실패: {e!r}"
+        result["message"] = f"실거래 API 조회 실패({type(e).__name__}) — 잠시 후 다시 시도할 것."
         return result
     if raw is None or raw.empty:
         result["status"] = "거래없음"
@@ -664,8 +670,11 @@ def scan_area(
     try:
         raw = pipeline.fetch_from_api_multi_month(months=months, gus=[gu])
     except Exception as e:  # noqa: BLE001
+        # 예외 원문은 응답에 싣지 않는다 — requests 예외엔 serviceKey 가 든 URL 이
+        # 들어 있다. 원인은 마스킹한 로그로만 남긴다.
+        logger.warning(f"실거래 API 조회 실패: {redact_secrets(e)}")
         result["status"] = "API_오류"
-        result["message"] = f"실거래 API 조회 실패: {e!r}"
+        result["message"] = f"실거래 API 조회 실패({type(e).__name__}) — 잠시 후 다시 시도할 것."
         return result
     if raw is None or raw.empty:
         result["status"] = "거래없음"

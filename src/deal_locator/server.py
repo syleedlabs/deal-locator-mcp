@@ -35,6 +35,7 @@ from deal_locator.core.lookup import (
     scan_gu,
 )
 from deal_locator.core.matching import parse_address
+from deal_locator.core.constants import redact_secrets
 
 # ── 머신 파싱 프리픽스 (환각 차단 규약) ──
 NOT_FOUND = "[NOT_FOUND]"
@@ -73,6 +74,9 @@ NO_GUESS = "LLM은 위 실측값만 사용할 것 — 없는 수치를 추측·�
 
 mcp = FastMCP(
     name="deal-locator",
+    # 도구 안에서 잡히지 않은 예외의 원문을 클라이언트에 보내지 않는다. 예외 문자열엔
+    # 인증키가 든 URL 이 섞일 수 있다. 의도해서 던진 ToolError 는 그대로 보인다.
+    mask_error_details=True,
     instructions=(
         "국토부 실거래가 × 건축물대장 역매칭 도구. 서울 상업업무용 매매 한정(v1). "
         "**취급 범위는 통건물(유형='일반')뿐이다 — 집합(구분상가) 거래는 모든 응답에서 "
@@ -170,6 +174,10 @@ def _scrub(v: Any) -> Any:
     통로가 된다. 정상 데이터에는 영향이 없다(무해한 무동작).
     """
     if isinstance(v, str):
+        # 인증키 마스킹도 여기서 한다 — 응답으로 나가는 문자열은 전부 이 관문을
+        # 지난다. 외부 API 예외 문자열엔 '?serviceKey=<키>' 가 든 URL 이 섞일 수 있고,
+        # 그대로 나가면 키가 LLM 대화 기록에 남는다.
+        v = redact_secrets(v)
         return _CTRL.sub("", v.replace("\r", " ").replace("\n", " ")).strip()
     if isinstance(v, dict):
         return {k: _scrub(x) for k, x in v.items()}
@@ -1752,7 +1760,7 @@ def _deal_card_create_payload(address: str, months: int, photo: str,
                           "`pip install jinja2 playwright` 후 `playwright install chromium` 을 실행하세요."))
         return d
     except Exception as e:  # noqa: BLE001
-        msg = f"{type(e).__name__}: {e}"
+        msg = redact_secrets(f"{type(e).__name__}: {e}")
         if "executable doesn't exist" in msg.lower() or "playwright install" in msg.lower():
             msg += " — 최초 1회 `playwright install chromium` 이 필요합니다."
         d.update(status="RENDER_ERROR", message=f"카드 렌더 실패 — {msg}")
