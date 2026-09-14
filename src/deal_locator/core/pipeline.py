@@ -55,6 +55,17 @@ _API_EN_TO_KO: dict[str, str] = {
 }
 
 
+# 국토부 상업업무용 매매 실거래(RTMS). https + 인증서 검증으로 직접 부른다(_fetch_trade_month).
+_TRADE_URL = "https://apis.data.go.kr/1613000/RTMSDataSvcNrgTrade/getRTMSDataSvcNrgTrade"
+# PublicDataReader 1.1 이 선언하던 컬럼 — 응답에 없는 필드도 빈 열로 채워 스키마를 예전과 같게 둔다.
+_TRADE_COLUMNS = [
+    "sggCd", "sggNm", "umdNm", "jibun", "buildingType", "buildingUse", "landUse", "floor",
+    "dealYear", "dealMonth", "dealDay", "dealAmount", "buildYear", "buildingAr", "plottageAr",
+    "cdealType", "cdealDay", "dealingGbn", "shareDealingType", "estateAgentSggNm",
+    "slerGbn", "buyerGbn",
+]
+
+
 def _translate_api_columns(df: pd.DataFrame) -> pd.DataFrame:
     """PublicDataReader 신버전(영문 컬럼) 응답 → 한글 컬럼으로 번역 (구버전은 무변경).
 
@@ -325,10 +336,65 @@ class RealEstateDataPipeline:
 
     # --- Step 1: 실거래가 취득 ---
 
+    def _fetch_trade_month(self, sigungu_code: str, year_month: str) -> pd.DataFrame:
+        """상업업무용 매매 실거래 — 1개 구 · 1개월 (https · 인증서 검증).
+
+        예전엔 PublicDataReader TransactionPrice 를 거쳤는데, 그 라이브러리가
+        `http://` 에 `verify=False` 로 호출해 인증키(serviceKey 쿼리)가 조회마다
+        평문으로 네트워크에 실렸다. URL 만 https 로 바꿔서는 인증서 검증이 꺼져
+        있어 부족하므로 직접 부른다. 재시도는 표제부와 같은 규칙(_fetch_pyoje_page).
+
+        반환 스키마는 PublicDataReader 와 같다(영문 원시 컬럼 — 번역은 호출측).
+
+        Raises:
+            RuntimeError: 재시도 후에도 응답이 없거나 API 가 오류 코드를 준 경우.
+                메시지에 인증키를 싣지 않는다.
+        """
+        from urllib.parse import unquote
+
+        base = {
+            "serviceKey": unquote(self._get_api_key()),
+            "LAWD_CD": sigungu_code,
+            "DEAL_YMD": year_month,
+            "numOfRows": "1000",
+        }
+        items: list[dict] = []
+        page = 1
+        while page <= 50:  # 한 구·한 달에 5만 건은 없다 — 폭주 방지 상한
+            data = self._fetch_pyoje_page(
+                _TRADE_URL, {**base, "pageNo": str(page)},
+                sigungu_code, year_month, page, label="실거래",
+            )
+            if data is None:
+                raise RuntimeError(f"실거래 API 무응답 ({sigungu_code} {year_month})")
+            header = data.get("response", {}).get("header", {}) or {}
+            code = str(header.get("resultCode", ""))
+            if code not in ("000", "00"):
+                raise RuntimeError(f"실거래 API 오류 {code}: {header.get('resultMsg')}")
+            body = data.get("response", {}).get("body", {}) or {}
+            # 결과 0건이면 <items/> 가 None 으로 파싱된다 — .get 호출 금지
+            got = (body.get("items") or {}).get("item", [])
+            if isinstance(got, dict):
+                got = [got]
+            if not got:
+                break
+            items.extend(got)
+            total = int(body.get("totalCount", 0) or 0)
+            if page * 1000 >= total:
+                break
+            page += 1
+
+        df = pd.DataFrame(items)
+        for col in _TRADE_COLUMNS:
+            if col not in df.columns:
+                df[col] = None
+        extras = [c for c in df.columns if c not in _TRADE_COLUMNS]
+        return df[_TRADE_COLUMNS + extras]
+
     def fetch_from_api(
         self, year_month: str = "", gus: Optional[list] = None
     ) -> pd.DataFrame:
-        """PublicDataReader -> 서울 상업업무용 매매 조회.
+        """서울 상업업무용 매매 조회 (국토부 RTMS 직접 호출, _fetch_trade_month).
 
         이번 달 데이터가 없으면 전달로 폴백합니다.
         API 호출은 최대 max_api_calls_per_fetch 회로 제한됩니다.
@@ -338,13 +404,6 @@ class RealEstateDataPipeline:
         """
         api_key = self._get_api_key()
         if not api_key:
-            return pd.DataFrame()
-
-        try:
-            from PublicDataReader import TransactionPrice
-            tp = TransactionPrice(api_key)
-        except Exception as e:
-            logger.error(f"TransactionPrice 초기화 실패: {redact_secrets(e)}")
             return pd.DataFrame()
 
         now = datetime.now()
@@ -376,22 +435,12 @@ class RealEstateDataPipeline:
             max_retries = 2
             for attempt in range(max_retries):
                 try:
-                    df = tp.get_data(
-                        property_type="상업업무용",
-                        trade_type="매매",
-                        sigungu_code=gu_code,
-                        year_month=year_month,
-                    )
+                    df = self._fetch_trade_month(gu_code, year_month)
                     api_calls += 1
 
                     if df is None or df.empty:
                         # 이번 달 데이터 없으면 전달 시도
-                        df = tp.get_data(
-                            property_type="상업업무용",
-                            trade_type="매매",
-                            sigungu_code=gu_code,
-                            year_month=ym_prev,
-                        )
+                        df = self._fetch_trade_month(gu_code, ym_prev)
                         api_calls += 1
 
                     if df is not None and not df.empty:
@@ -1377,6 +1426,7 @@ class RealEstateDataPipeline:
 
     def _fetch_pyoje_page(
         self, url: str, params: dict, gu_name: str, dong_name: str, page: int,
+        label: str = "표제부",
     ) -> Optional[dict]:
         """표제부 1페이지를 재시도하며 받아 파싱 결과를 돌려준다 (최종 실패면 None).
 
@@ -1423,7 +1473,7 @@ class RealEstateDataPipeline:
             except Exception:  # noqa: BLE001
                 last = "응답 파싱 실패"
         logger.warning(
-            f"표제부 API 페이지 {page} 최종 실패"
+            f"{label} API 페이지 {page} 최종 실패"
             f"({self._PYOJE_PAGE_ATTEMPTS}회, {last}): {gu_name} {dong_name}"
         )
         return None
