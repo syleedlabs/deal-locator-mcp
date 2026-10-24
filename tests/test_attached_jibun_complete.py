@@ -180,6 +180,19 @@ def test_partial_fetch_does_not_replace_complete_cache(tmp_path: Path, monkeypat
     assert idx.complete is True and idx.lot_set("157-27") == {"157-27", "157-29"}
 
 
+def test_partial_fetch_merges_with_unverified_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """옛 캐시(미검증)와 이번 부분 수신이 둘 다 불완전하면 합친다 — 한쪽을 버리면 증거를 잃는다."""
+    _disk(tmp_path).parent.mkdir(parents=True)
+    _disk(tmp_path).write_text(json.dumps({"pairs": [{"main": "157-27", "attached": "157-29"}]}), encoding="utf-8")
+    p = _pipe(tmp_path, monkeypatch)
+    monkeypatch.setattr(P, "fetch_attached_jibun",
+                        lambda *a, **k: AttachedFetch([{"main": "1-1", "attached": "1-2"}], 627, 100, False))
+    idx = p.load_attached_index("강남구", "삼성동")
+    assert idx.complete is False
+    assert idx.lot_set("157-27") == {"157-27", "157-29"} and idx.lot_set("1-1") == {"1-1", "1-2"}
+    assert "complete" not in json.loads(_disk(tmp_path).read_text(encoding="utf-8"))   # 저장하지 않았다
+
+
 def test_total_api_failure_is_incomplete_not_single(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     p = _pipe(tmp_path, monkeypatch)
     monkeypatch.setattr(P, "fetch_attached_jibun", lambda *a, **k: None)

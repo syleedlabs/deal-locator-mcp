@@ -1413,6 +1413,11 @@ class RealEstateDataPipeline:
         if fetched is not None and (fetched.complete or disk_idx is None
                                     or disk_idx.complete is not True):
             idx = AttachedJibunIndex.from_fetch(fetched)
+            if not idx.complete and disk_idx is not None:
+                # 둘 다 불완전·미검증이면 합친다 — 쌍은 '있다'는 증거라 양쪽 다 유효하다
+                # (2026-10-24 점검: 부분 수신 189쌍이 옛 캐시 335쌍을 덮던 경우).
+                for pr in disk_idx.to_pairs():
+                    idx.add(pr["main"], pr["attached"])
             if disk_path and idx.complete:
                 try:
                     idx.save_json(disk_path)
