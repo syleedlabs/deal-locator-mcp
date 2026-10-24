@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
   "name": "io.github.syleedlabs/deal-locator",
   "description": "국토부 실거래가 × 건축물대장 역매칭 — 마스킹된 실거래 지번을 특정한다 (서울 상업업무용, 공인중개사용)",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "repository": {
     "url": "https://github.com/syleedlabs/deal-locator-mcp",
     "source": "github"
@@ -12,7 +12,7 @@
       "registryType": "oci",
       "registryBaseUrl": "https://github.com",
       "identifier": "syleedlabs/deal-locator-mcp",
-      "version": "1.5.2",
+      "version": "1.5.3",
       "transport": { "type": "stdio" },
       "environmentVariables": [
         {
