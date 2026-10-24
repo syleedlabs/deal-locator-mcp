@@ -293,6 +293,8 @@ def _context_notes(res: dict[str, Any]) -> list[str]:
         )
     elif mc.get("multi_lot"):
         out.append(f"※ 다필지 대지(필지 {len(mc['lot_set'])}개: {', '.join(mc['lot_set'])}) — 대지면적 비교 완화 적용")
+    elif mc.get("lot_index_complete") is False:
+        out.append("※ 부속지번 대장을 일부만 받음 — 다필지 여부 미확인(대지면적 비교 완화 미적용)")
     if res.get("cancelled_count"):
         out.append(f"※ 해제신고 거래 {res['cancelled_count']}건 제외")
     note = _current_month_note(res)
@@ -875,6 +877,9 @@ MATCH_EXPLAIN_OUTPUT_SCHEMA = {
         },
         "lot_set": {"type": "array", "items": {"type": "string"}},
         "multi_lot": {"type": "boolean", "description": "true면 대지면적 비교를 완화해 매칭한 것"},
+        "lot_index_complete": {"type": ["boolean", "null"],
+                               "description": ("그 동의 부속지번 대장을 끝까지 받았는가. false 면 multi_lot=false 가 "
+                                               "'단일'이라는 뜻이 아니다(미확인). null 은 대장을 조회하지 못한 것")},
         "anchor_via": {"type": "string", "description": "직접/부속지번/인접본번"},
         "anchor_bunji": {"type": "string"},
         "disclaimer": {"type": "string"},
@@ -904,7 +909,7 @@ def _match_explain_payload(address: str, months: int) -> dict[str, Any]:
         "query": address, "address": None,
         "period_months": max(1, min(int(months), 60)),
         "deal": None, "verdict": None, "anchor": None, "row": None,
-        "comparison": None, "lot_set": [], "multi_lot": False,
+        "comparison": None, "lot_set": [], "multi_lot": False, "lot_index_complete": None,
         "anchor_via": "", "anchor_bunji": "",
         "disclaimer": ATCH_DISCLAIMER, "source": SOURCE_LINE,
     }
@@ -953,6 +958,7 @@ def _match_explain_payload(address: str, months: int) -> dict[str, Any]:
     # lot_set 은 조회 컨텍스트, multi_lot 은 매칭 근거 기준 (원 렌더러와 동일 출처).
     d["lot_set"] = list(mc.get("lot_set", []))
     d["multi_lot"] = bool(basis.get("multi_lot"))
+    d["lot_index_complete"] = mc.get("lot_index_complete")
     d["anchor_via"] = mc.get("anchor_via", "")
     d["anchor_bunji"] = mc.get("anchor_bunji", "") or ""
     return d
@@ -981,7 +987,9 @@ def _render_match_explain(d: dict[str, Any]) -> str:
     lines.append(f"  [거래행] 지번 '{r.get('raw_jibun','')}' · "
                  f"연면적 {r.get('gross_sqm')}㎡ · 대지 {r.get('land_sqm')}㎡ · 건축년도 {r.get('build_year')}")
     lines.append(f"  필지세트: {', '.join(d['lot_set']) or '-'}"
-                 + (" (다필지)" if d["multi_lot"] else " (단일)"))
+                 + (" (다필지)" if d["multi_lot"]
+                    else " (필지 구성 미확인 — 부속지번 대장 일부만 수신)"
+                    if d.get("lot_index_complete") is False else " (단일)"))
     lines.append(f"  앵커 경로: {d['anchor_via'] or '-'}"
                  + (f" → 대표지번 {d['anchor_bunji']}" if d["anchor_via"] == "부속지번" else ""))
     if v.get("caveat"):

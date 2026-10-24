@@ -20,6 +20,7 @@ from typing import Any, Optional
 
 import pandas as pd
 
+from .attached_jibun import classify_lot
 from .matching import (
     CONFIDENCE,
     build_match_basis,
@@ -254,11 +255,21 @@ def lookup_deal(
             neighbor_mode = True
             anchor_via = "인접본번"
 
-    lots = (atch.lot_set(anchor_bunji) | atch.lot_set(bunji)) if atch else {norm_bunji(bunji)}
+    lots = {norm_bunji(bunji)}
+    lot_index_complete: Optional[bool] = None
+    lot_source = ""
+    if atch is not None:
+        # 대장이 불완전하면 질의 지번을 직접 물어 필지세트를 보강한다(classify_lot).
+        # 놓친 다필지는 대지면적 비교 완화를 못 받아 매칭이 빗나간다(2026-10-24 삼성동 157-27).
+        direct = getattr(pipeline, "lot_direct", None)
+        info = classify_lot(atch, bunji, (lambda: direct(gu, dong, bunji)) if direct else None)
+        lots = atch.lot_set(anchor_bunji) | atch.lot_set(bunji) | set(info["lot_set"])
+        lot_index_complete, lot_source = info["index_complete"], info["lot_source"]
     multi_lot = len(lots) > 1
     result["match_context"] = {
         "anchor_bunji": anchor_bunji, "anchor_via": anchor_via,
         "lot_set": sorted(lots), "multi_lot": multi_lot,
+        "lot_index_complete": lot_index_complete, "lot_source": lot_source,
         "neighbor": neighbor_mode,
     }
 
