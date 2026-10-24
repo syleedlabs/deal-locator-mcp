@@ -28,7 +28,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from .constants import redact_secrets
 
@@ -224,6 +224,39 @@ def fetch_lot_direct(
         if main and attached and main != attached:
             lots.update((main, attached))
     return lots
+
+
+def classify_lot(idx: Any, bunji: str,
+                 direct: Optional[Callable[[], Optional[set[str]]]] = None) -> dict[str, Any]:
+    """질의 지번의 필지 구성 판정 — resolve_address·lookup 공용 정본.
+
+    반환: lot_set, lot_structure(단일/다필지/부속지번/조회불완전), main_bunji,
+          lot_source(인덱스/직접조회), index_complete.
+    '단일'은 인덱스가 완전할 때만. 불완전하면 direct()(질의 지번 직접 조회)를 부른다 —
+    부속지번이 나오면 '다필지', 0건·실패면 '조회불완전'(0건은 단일의 근거가 아니다).
+    complete 속성이 없는 인덱스는 완전한 것으로 본다(호환).
+    """
+    from .matching import norm_bunji
+    b = norm_bunji(bunji)
+    complete = getattr(idx, "complete", True) is True
+    out: dict[str, Any] = {"lot_set": sorted(idx.lot_set(b)), "lot_structure": "",
+                           "main_bunji": None, "lot_source": "인덱스",
+                           "index_complete": complete}
+    mains = idx.resolve_main(b)
+    if mains:
+        out["lot_structure"], out["main_bunji"] = "부속지번", mains[0]
+    elif len(out["lot_set"]) > 1:
+        out["lot_structure"] = "다필지"
+    elif complete:
+        out["lot_structure"] = "단일"
+    else:
+        found = direct() if direct else None
+        if found:
+            out.update(lot_set=sorted(found), lot_structure="다필지", lot_source="직접조회")
+        else:
+            out.update(lot_set=[], lot_structure="조회불완전",
+                       lot_source="직접조회" if found is not None else "인덱스")
+    return out
 
 
 class AttachedJibunIndex:

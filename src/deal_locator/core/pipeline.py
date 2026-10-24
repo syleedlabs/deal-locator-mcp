@@ -20,7 +20,7 @@ from typing import Any, Callable, Optional
 
 import pandas as pd
 
-from .attached_jibun import AttachedJibunIndex, fetch_attached_jibun, fetch_lot_direct
+from .attached_jibun import AttachedJibunIndex, classify_lot, fetch_attached_jibun, fetch_lot_direct
 from .config import PipelineConfig
 from .constants import API_TO_CSV_COLUMNS, SEOUL_GU_CODES, redact_secrets
 from .matching import jibun_equal, masked_prefix_ok_any, norm_bunji
@@ -1430,41 +1430,20 @@ class RealEstateDataPipeline:
             return _keep(disk_idx)
         return _keep(AttachedJibunIndex(complete=False))
 
-    def lot_info(self, gu_name: str, dong_name: str, bunji: str) -> dict[str, Any]:
-        """질의 지번의 필지 구성 — resolve_address 와 lookup 이 함께 쓰는 단일 판정.
-
-        반환: lot_set, lot_structure(단일/다필지/부속지번/조회불완전), main_bunji,
-              lot_source(인덱스/직접조회), index_complete.
-        '단일'은 인덱스가 완전할 때만. 불완전하면 질의 지번을 직접 묻는다 —
-        직접 조회는 대표지번에서만 부속지번을 돌려주므로 0건이면 '조회불완전'이다.
-        """
+    def lot_direct(self, gu_name: str, dong_name: str, bunji: str) -> Optional[set[str]]:
+        """질의 지번 1건 직접 조회(메모). 대표지번일 때만 부속지번이 나온다."""
         from .matching import norm_bunji
-        b = norm_bunji(bunji)
+        key = (gu_name, dong_name, norm_bunji(bunji))
+        if key not in self._lot_direct_cache:
+            self._lot_direct_cache[key] = fetch_lot_direct(
+                self._get_api_key(), SEOUL_GU_CODES.get(gu_name, ""),
+                self._get_bdong_code(gu_name, dong_name), key[2])
+        return self._lot_direct_cache[key]
+
+    def lot_info(self, gu_name: str, dong_name: str, bunji: str) -> dict[str, Any]:
+        """질의 지번의 필지 구성(attached_jibun.classify_lot 참조)."""
         idx = self.load_attached_index(gu_name, dong_name)
-        complete = idx.complete is True
-        out: dict[str, Any] = {"lot_set": sorted(idx.lot_set(b)), "lot_structure": "",
-                               "main_bunji": None, "lot_source": "인덱스",
-                               "index_complete": complete}
-        mains = idx.resolve_main(b)
-        if mains:
-            out["lot_structure"], out["main_bunji"] = "부속지번", mains[0]
-        elif len(out["lot_set"]) > 1:
-            out["lot_structure"] = "다필지"
-        elif complete:
-            out["lot_structure"] = "단일"
-        else:
-            key = (gu_name, dong_name, b)
-            if key not in self._lot_direct_cache:
-                self._lot_direct_cache[key] = fetch_lot_direct(
-                    self._get_api_key(), SEOUL_GU_CODES.get(gu_name, ""),
-                    self._get_bdong_code(gu_name, dong_name), b)
-            direct = self._lot_direct_cache[key]
-            if direct:
-                out.update(lot_set=sorted(direct), lot_structure="다필지", lot_source="직접조회")
-            else:
-                out.update(lot_set=[], lot_structure="조회불완전",
-                           lot_source="직접조회" if direct is not None else "인덱스")
-        return out
+        return classify_lot(idx, bunji, lambda: self.lot_direct(gu_name, dong_name, bunji))
 
     # 표제부 페이지 재시도 상한. 한 페이지가 이만큼 연속 실패하면 포기한다.
     _PYOJE_PAGE_ATTEMPTS = 5
