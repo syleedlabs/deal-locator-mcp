@@ -34,6 +34,7 @@ from deal_locator.core.lookup import (
     scan_area,
     scan_gu,
 )
+from deal_locator.core.attached_jibun import classify_lot
 from deal_locator.core.matching import parse_address
 from deal_locator.core.constants import redact_secrets
 
@@ -347,12 +348,19 @@ RESOLVE_ADDRESS_OUTPUT_SCHEMA = {
         "sigungu_code": {"type": "string", "description": "시군구 5자리. 미상이면 빈 문자열"},
         "bdong_code": {"type": "string", "description": "법정동 5자리. 조회 실패면 빈 문자열"},
         "lot_set": {"type": "array", "items": {"type": "string"},
-                    "description": "질의 지번이 속한 대지의 필지세트(대표+부속). lot_structure='조회실패'면 빈 배열"},
+                    "description": "질의 지번이 속한 대지의 필지세트(대표+부속). lot_structure='조회실패'·'조회불완전'이면 빈 배열"},
         "lot_structure": {
             "type": "string",
-            "enum": ["단일", "다필지", "부속지번", "조회실패"],
-            "description": "필지 구성. '조회실패'는 '단일'이 아니라 미확인 — 단독 근거로 쓰지 말 것",
+            "enum": ["단일", "다필지", "부속지번", "조회불완전", "조회실패"],
+            "description": ("필지 구성. '단일'은 부속지번 대장을 끝까지 받았을 때만(index_complete=true) 나온다. "
+                            "'조회불완전'(대장 일부만 수신, 직접 조회로도 확정 못 함)과 '조회실패'는 "
+                            "'단일'이 아니라 미확인 — 단독 근거로 쓰지 말 것"),
         },
+        "index_complete": {"type": "boolean",
+                           "description": "그 동의 부속지번 대장을 끝까지 받았는가. false 면 미등재가 '없음'이 아닐 수 있다"},
+        "lot_source": {"type": "string", "enum": ["인덱스", "직접조회", ""],
+                       "description": ("판정 근거. '직접조회'는 대장이 불완전해 질의 지번 1건을 직접 물은 것 — "
+                                       "대표지번일 때만 부속지번이 나오므로 0건은 '단일'의 근거가 아니다")},
         "main_bunji": {"type": ["string", "null"],
                        "description": "lot_structure='부속지번' 일 때 대표지번"},
         "source": {"type": "string"},
@@ -367,6 +375,7 @@ def _resolve_address_payload(query: str) -> dict[str, Any]:
         "status": "", "message": "", "query": query, "address": None,
         "sigungu_code": "", "bdong_code": "",
         "lot_set": [], "lot_structure": "조회실패", "main_bunji": None,
+        "index_complete": False, "lot_source": "",
         "source": SOURCE_LINE,
     }
 
@@ -391,17 +400,10 @@ def _resolve_address_payload(query: str) -> dict[str, Any]:
         p = get_pipeline()
         d["bdong_code"] = p.get_bdong_code(gu, dong) or ""
         idx = p.load_attached_index(gu, dong)
-        d["lot_set"] = sorted(idx.lot_set(bunji))
-        mains = idx.resolve_main(bunji)
-        if mains:
-            d["lot_structure"], d["main_bunji"] = "부속지번", mains[0]
-        elif len(d["lot_set"]) > 1:
-            d["lot_structure"] = "다필지"
-        else:
-            d["lot_structure"] = "단일"
+        d.update(classify_lot(idx, bunji, lambda: p.lot_direct(gu, dong, bunji)))
     except Exception:  # noqa: BLE001 — 보강 정보 실패는 해석 결과에 영향 없음
-        d["lot_set"] = []
-        d["lot_structure"] = "조회실패"
+        d.update(lot_set=[], lot_structure="조회실패", main_bunji=None,
+                 index_complete=False, lot_source="")
     return d
 
 
@@ -421,9 +423,13 @@ def _render_resolve_address(d: dict[str, Any]) -> str:
     if struct == "부속지번":
         lines.append(f"  필지 구성: '{a.get('bunji', '')}'는 대표지번 {d['main_bunji']}의 부속지번 — 세트 {lots}")
     elif struct == "다필지":
-        lines.append(f"  필지 구성: 다필지 대지 — 세트 {lots}")
+        lines.append(f"  필지 구성: 다필지 대지 — 세트 {lots}"
+                     + (" (대장 불완전 → 지번 직접 조회로 확인)" if d.get("lot_source") == "직접조회" else ""))
     elif struct == "단일":
         lines.append("  필지 구성: 단일 필지(부속지번 대장 기준)")
+    elif struct == "조회불완전":
+        lines.append("  필지 구성: 미확인 — 부속지번 대장을 끝까지 받지 못했고 직접 조회로도 확정 못 함"
+                     "(단일이라는 뜻이 아님)")
     else:
         lines.append("  필지 구성: (부속지번 조회 실패 — 키/네트워크 확인)")
     lines.append(SOURCE_LINE)
@@ -437,7 +443,8 @@ def resolve_address(query: str) -> ToolResult:
 
     예: '구로구 구로동 1128-1', '서울 성수동2가 321-90' (동만 줘도 구를 역추적).
     다른 도구를 쓰기 전 주소가 모호할 때 먼저 호출.
-    lot_structure='조회실패'는 '단일 필지'가 아니라 미확인이다 — 구분해 읽을 것.
+    lot_structure='조회실패'·'조회불완전'은 '단일 필지'가 아니라 미확인이다 — 구분해 읽을 것.
+    '단일'은 그 동의 부속지번 대장을 끝까지 받았을 때(index_complete=true)만 나온다.
     """
     data = _resolve_address_payload(query)
     return ToolResult(content=_render_resolve_address(data), structured_content=data,
