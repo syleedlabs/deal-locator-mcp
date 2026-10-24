@@ -16,11 +16,11 @@ import re
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import pandas as pd
 
-from .attached_jibun import AttachedJibunIndex, fetch_attached_jibun
+from .attached_jibun import AttachedJibunIndex, fetch_attached_jibun, fetch_lot_direct
 from .config import PipelineConfig
 from .constants import API_TO_CSV_COLUMNS, SEOUL_GU_CODES, redact_secrets
 from .matching import jibun_equal, masked_prefix_ok_any, norm_bunji
@@ -189,6 +189,9 @@ class RealEstateDataPipeline:
         self._pyoje_bon_cache: dict[str, pd.DataFrame] = {}
         # 부속지번 인덱스 메모리 캐시 (구_동 키)
         self._attached_cache: dict[str, AttachedJibunIndex] = {}
+        # 불완전 인덱스를 메모리에 둔 시각 — 일정 시간 뒤 다시 받는다(영구 고착 방지)
+        self._attached_partial_at: dict[str, float] = {}
+        self._lot_direct_cache: dict[tuple[str, str, str], Optional[set[str]]] = {}
         # 법정동코드 매핑 캐시
         self._bdong_codes: Optional[pd.DataFrame] = None
 
@@ -1358,65 +1361,110 @@ class RealEstateDataPipeline:
 
         return pd.DataFrame()
 
+    _PARTIAL_RETRY_SEC = 600
+
     def load_attached_index(self, gu_name: str, dong_name: str) -> AttachedJibunIndex:
         """부속지번 인덱스를 로드합니다 (메모리 → 디스크 JSON → API, 항상 성공).
 
-        다필지(합필) 대지 매칭 정밀화용. API/키 실패 시 빈 인덱스를 반환해
-        기존 매칭 흐름을 막지 않는다(부속지번은 보강 데이터).
-        디스크 캐시: cache_dir/attached_jibun/{구}_{동}.json (staleness_days 적용,
-        API 실패 시 만료 캐시라도 폴백).
+        다필지(합필) 대지 매칭 정밀화용. API/키 실패 시에도 인덱스를 돌려 기존 매칭
+        흐름을 막지 않지만, 그때는 complete=False 다 — 미등재를 '단일'로 읽지 말 것.
+        디스크 캐시: cache_dir/attached_jibun/{구}_{동}.json (staleness_days 적용).
+          · 완전한 인덱스만 저장한다. 메타데이터 없는 옛 캐시는 미검증으로 보고 다시 받는다.
+          · API 가 실패하면 만료·미검증 캐시라도 폴백하되 그 완전성 표시를 그대로 둔다.
         """
         cache_key = f"{gu_name}_{dong_name}"
         if cache_key in self._attached_cache:
-            return self._attached_cache[cache_key]
+            partial_at = self._attached_partial_at.get(cache_key)
+            if partial_at is None or time.time() - partial_at < self._PARTIAL_RETRY_SEC:
+                return self._attached_cache[cache_key]
 
         disk_path: Optional[Path] = None
         if _is_valid_dir(self._cache_dir):
             disk_path = self._cache_dir / "attached_jibun" / f"{cache_key}.json"
 
-        # 1순위: 신선한 디스크 캐시
+        def _keep(idx: AttachedJibunIndex) -> AttachedJibunIndex:
+            self._attached_cache[cache_key] = idx
+            if idx.complete is True:
+                self._attached_partial_at.pop(cache_key, None)
+            else:
+                self._attached_partial_at[cache_key] = time.time()
+            return idx
+
+        disk_idx: Optional[AttachedJibunIndex] = None
         if disk_path and disk_path.exists():
+            try:
+                disk_idx = AttachedJibunIndex.load_json(disk_path)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"부속지번 캐시 파싱 실패({disk_path.name}): {e}")
+
+        # 1순위: 신선하고 완전한 디스크 캐시
+        if disk_idx is not None and disk_idx.complete is True:
             age_days = (
                 datetime.now()
                 - datetime.fromtimestamp(disk_path.stat().st_mtime)
             ).days
             if age_days <= self._staleness_days:
-                try:
-                    idx = AttachedJibunIndex.load_json(disk_path)
-                    self._attached_cache[cache_key] = idx
-                    return idx
-                except Exception as e:  # noqa: BLE001
-                    logger.warning(f"부속지번 캐시 파싱 실패({disk_path.name}): {e}")
+                return _keep(disk_idx)
 
         # 2순위: API 조회
         sigungu_code = SEOUL_GU_CODES.get(gu_name, "")
         bdong_code = self._get_bdong_code(gu_name, dong_name)
-        pairs = fetch_attached_jibun(self._get_api_key(), sigungu_code, bdong_code)
-        if pairs is not None:
-            idx = AttachedJibunIndex(pairs)
-            if disk_path:
+        fetched = fetch_attached_jibun(self._get_api_key(), sigungu_code, bdong_code)
+        if fetched is not None and (fetched.complete or disk_idx is None
+                                    or disk_idx.complete is not True):
+            idx = AttachedJibunIndex.from_fetch(fetched)
+            if disk_path and idx.complete:
                 try:
                     idx.save_json(disk_path)
                 except Exception as e:  # noqa: BLE001
                     logger.warning(f"부속지번 캐시 저장 실패: {e}")
-            self._attached_cache[cache_key] = idx
             logger.info(
                 f"부속지번 인덱스: {gu_name} {dong_name} - 다필지 대지 {len(idx)}건"
+                + ("" if idx.complete else f" (불완전: {fetched.rows}/{fetched.total_count}행)")
             )
-            return idx
+            return _keep(idx)
 
-        # 3순위: 만료됐어도 디스크 캐시 폴백, 그마저 없으면 빈 인덱스
-        if disk_path and disk_path.exists():
-            try:
-                idx = AttachedJibunIndex.load_json(disk_path)
-                self._attached_cache[cache_key] = idx
-                logger.info(f"부속지번: API 실패 → 만료 캐시 사용 ({cache_key})")
-                return idx
-            except Exception:  # noqa: BLE001
-                pass
-        idx = AttachedJibunIndex()
-        self._attached_cache[cache_key] = idx
-        return idx
+        # 3순위: 디스크 캐시 폴백(만료·미검증이어도) — 완전성 표시는 캐시 그대로
+        if disk_idx is not None:
+            logger.info(f"부속지번: API 실패 → 캐시 사용 ({cache_key}, complete={disk_idx.complete})")
+            return _keep(disk_idx)
+        return _keep(AttachedJibunIndex(complete=False))
+
+    def lot_info(self, gu_name: str, dong_name: str, bunji: str) -> dict[str, Any]:
+        """질의 지번의 필지 구성 — resolve_address 와 lookup 이 함께 쓰는 단일 판정.
+
+        반환: lot_set, lot_structure(단일/다필지/부속지번/조회불완전), main_bunji,
+              lot_source(인덱스/직접조회), index_complete.
+        '단일'은 인덱스가 완전할 때만. 불완전하면 질의 지번을 직접 묻는다 —
+        직접 조회는 대표지번에서만 부속지번을 돌려주므로 0건이면 '조회불완전'이다.
+        """
+        from .matching import norm_bunji
+        b = norm_bunji(bunji)
+        idx = self.load_attached_index(gu_name, dong_name)
+        complete = idx.complete is True
+        out: dict[str, Any] = {"lot_set": sorted(idx.lot_set(b)), "lot_structure": "",
+                               "main_bunji": None, "lot_source": "인덱스",
+                               "index_complete": complete}
+        mains = idx.resolve_main(b)
+        if mains:
+            out["lot_structure"], out["main_bunji"] = "부속지번", mains[0]
+        elif len(out["lot_set"]) > 1:
+            out["lot_structure"] = "다필지"
+        elif complete:
+            out["lot_structure"] = "단일"
+        else:
+            key = (gu_name, dong_name, b)
+            if key not in self._lot_direct_cache:
+                self._lot_direct_cache[key] = fetch_lot_direct(
+                    self._get_api_key(), SEOUL_GU_CODES.get(gu_name, ""),
+                    self._get_bdong_code(gu_name, dong_name), b)
+            direct = self._lot_direct_cache[key]
+            if direct:
+                out.update(lot_set=sorted(direct), lot_structure="다필지", lot_source="직접조회")
+            else:
+                out.update(lot_set=[], lot_structure="조회불완전",
+                           lot_source="직접조회" if direct is not None else "인덱스")
+        return out
 
     # 표제부 페이지 재시도 상한. 한 페이지가 이만큼 연속 실패하면 포기한다.
     _PYOJE_PAGE_ATTEMPTS = 5
